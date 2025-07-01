@@ -1,0 +1,361 @@
+You are an expert programmer with years of experience in writing codes for machine learning (ML) tasks on Kaggle. Your goal is to write an end-to-end executable program that can solve the ML task based on the provided instructions. The user is trying to create a Python program for a supervised machine learning task. Your goal is to assist the user in creating the program. The user might provide the following information for the task:
+
+1. A description of the input data:-- The input data for each sample consists of 1 text fields:
+
+- `Title`: The title of the paper.
+
+2. A description of the output data:-- The output is a one of the 4 possible classes. Each class corresponds to one of the 4 different domain
+
+3. The task objective:-- For each given `Title`, identify which of the 4 domain. This is a multi-class classification task where the output is a set of class.
+
+4. The evaluation metrics:-- The evaluation metric is Log Loss (logloss). A lower logloss score indicates a better-performing model.
+
+5. A description of the available files:--
+
+- `train.csv`: Contains the training data with three columns: `Title`, `Domain`
+
+6. Link to the data files:/content/train.csv
+
+split the train to evaluate by these folowing metrics: accuracy log_loss f1_macro f1_weighted roc_auc_ovr roc_auc_ovr_weighted
+
+use the newest version of each library you use
+
+Following is an example of an task and its corresponding ground truth code:
+
+Task:
+
+You are an expert programmer with years of experience in writing codes for machine learning (ML) tasks on Kaggle. Your goal is to write an end-to-end executable program that can solve the ML task based on the provided instructions. The user is trying to create a Python program for a supervised machine learning task. Your goal is to assist the user in creating the program. The user might provide the following information for the task:
+
+1. A description of the input data: The input data for each sample is a specific argumentative "discourse element" from a student's essay. To provide full context, the input consists of three parts:
+
+- `discourse_text`: The text of the specific discourse element itself.
+
+- `discourse_type`: The type of the element (e.g., 'Lead', 'Position', 'Claim', 'Evidence', etc.).
+
+- The full text of the essay from which the discourse element was extracted.
+
+2. A description of the output data: The output is a probability distribution across 3 possible quality ratings for the discourse element. The three classes are: "Ineffective", "Adequate", and "Effective".
+
+3. The task objective: For each given argumentative discourse element, classify its quality into one of the three categories: "Ineffective", "Adequate", or "Effective". This is a multi-class classification problem.
+
+4. The evaluation metrics:The evaluation metric is multi-class logarithmic loss (logloss).
+
+5. A description of the available files:
+
+- `train.csv`: Contains the training data. Each row represents an annotated discourse element and includes its `discourse_id`, the `essay_id` it belongs to, the `discourse_text`, the `discourse_type`, and the target label `discourse_effectiveness`.
+
+- `train/`: A directory containing the full text of each training essay, stored in `.txt` files. The filename of each `.txt` file corresponds to an `essay_id` in `train.csv`.
+
+6.Link to the data files:/kaggle/input/feedback-prize-effectiveness/train; /kaggle/input/feedback-prize-effectiveness/train.csv
+
+split the train to evaluate by these folowing metrics: accuracy log_loss f1_macro f1_weighted roc_auc_ovr roc_auc_ovr_weighted
+
+use the newest version of each library you use
+
+Code:
+
+# Import necessary libraries
+
+import pandas as pd
+
+import numpy as np
+
+import osfrom sklearn.model_selection import train_test_split
+
+from sklearn.feature_extraction.text import TfidfVectorizer
+
+from sklearn.linear_model import LogisticRegression
+
+from sklearn.pipeline import Pipeline
+
+from sklearn.metrics import (
+
+accuracy_score,
+
+log_loss,f1_score,roc_auc_score,
+
+)from sklearn.preprocessing import LabelEncoder
+
+# --- Configuration ---
+
+# Define paths to the data files.
+
+# In a real Kaggle environment, these paths would be '/kaggle/input/...'
+
+# For local testing, we will create dummy files.
+
+TRAIN_CSV_PATH = '/kaggle/input/feedback-prize-effectiveness/train.csv'
+
+TRAIN_ESSAYS_PATH = '/kaggle/input/feedback-prize-effectiveness/train/'
+
+# --- Data Loading and Preparation ---
+
+def create_dummy_data():
+
+"""Creates dummy data files for local testing if they don't exist.
+
+This simulates the Kaggle environment.
+
+"""print("Creating dummy data for local execution...")
+
+# Create dummy train.csv
+
+if not os.path.exists(TRAIN_CSV_PATH):
+
+train_data = {
+
+discourse_id': [f'd{i}' for i in range(100)],
+
+essay_id': [f'essay_{i % 10}' for i in range(100)],
+
+discourse_text': [
+
+This is a sample lead.', 'The author makes a claim.', 'Here is some evidence.',
+
+This is a concluding statement.', 'Another position is taken here.'
+
+] * 20,discourse_type': ['Lead', 'Claim', 'Evidence', 'Concluding Statement', 'Position'] * 20,
+
+discourse_effectiveness': ['Adequate', 'Effective', 'Ineffective', 'Adequate', 'Effective'] * 20
+
+}train_df = pd.DataFrame(train_data)
+
+train_df.to_csv(TRAIN_CSV_PATH, index=False)
+
+print(f"'{TRAIN_CSV_PATH}' created.")
+
+# Create dummy essay text files
+
+if not os.path.exists(TRAIN_ESSAYS_PATH):
+
+os.makedirs(TRAIN_ESSAYS_PATH)
+
+for i in range(10):
+
+essay_id = f'essay_{i}'
+
+essay_text = (
+
+f"This is the full text for essay {essay_id}. "
+
+"It contains various discourse elements that are analyzed. "
+
+"The student argues a point, provides evidence, and concludes the argument. "
+
+"The quality of these elements varies."
+
+)with open(os.path.join(TRAIN_ESSAYS_PATH, f'{essay_id}.txt'), 'w') as f:
+
+f.write(essay_text)
+
+print(f"'{TRAIN_ESSAYS_PATH}' directory and dummy essays created.")
+
+def load_data(train_csv_path, essays_path):
+
+"""Loads the training data from the CSV and merges it with the full essay texts.
+
+Args:train_csv_path (str): Path to the train.csv file.
+
+essays_path (str): Path to the directory containing essay .txt files.
+
+Returns:pandas.DataFrame: A DataFrame with the combined data.
+
+"""print("Loading data...")
+
+# Load the main training data
+
+try:df = pd.read_csv(train_csv_path)
+
+except FileNotFoundError:
+
+print(f"Error: Training CSV not found at '{train_csv_path}'.")
+
+return None# Load essay texts into a dictionary
+
+essay_texts = {}
+
+for filename in os.listdir(essays_path):
+
+if filename.endswith('.txt'):
+
+essay_id = filename.split('.')[0]
+
+with open(os.path.join(essays_path, filename), 'r') as f:
+
+essay_texts[essay_id] = f.read()
+
+# Map the essay texts to the DataFrame
+
+df['essay_full_text'] = df['essay_id'].map(essay_texts)
+
+print("Data loading complete.")
+
+return dfdef feature_engineering(df):
+
+"""Creates a combined text feature for the model.
+
+Args:df (pandas.DataFrame): The input DataFrame.
+
+Returns:pandas.DataFrame: The DataFrame with the new 'full_context_text' feature.
+
+"""print("Performing feature engineering...")
+
+# Combine the discourse text, type, and the full essay for context
+
+# Using a separator to give the model a hint about the different parts
+
+df['full_context_text'] = (
+
+df['discourse_type'] + ' [SEP] ' +
+
+df['discourse_text'] + ' [SEP] ' +
+
+df['essay_full_text']
+
+)print("Feature engineering complete.")
+
+return df# --- Main Execution Logic ---
+
+if __name__ == "__main__":
+
+# Create dummy files if they don't exist (for local runs)
+
+if not (os.path.exists(TRAIN_CSV_PATH) and os.path.exists(TRAIN_ESSAYS_PATH)):
+
+create_dummy_data()
+
+# 1. Load and Prepare Data
+
+train_df = load_data(TRAIN_CSV_PATH, TRAIN_ESSAYS_PATH)
+
+if train_df is not None:
+
+train_df = feature_engineering(train_df)
+
+# Define features (X) and target (y)
+
+X = train_df['full_context_text']
+
+y_raw = train_df['discourse_effectiveness']
+
+# 2. Encode Target Labels
+
+# The labels need to be converted from strings to integers (0, 1, 2)
+
+print("Encoding target labels...")
+
+label_encoder = LabelEncoder()
+
+y = label_encoder.fit_transform(y_raw)
+
+# The mapping will be: Adequate -> 0, Effective -> 1, Ineffective -> 2
+
+# We can see the classes with `label_encoder.classes_`
+
+class_names = label_encoder.classes_
+
+print(f"Labels encoded. Class mapping: {dict(zip(class_names, range(len(class_names))))}")
+
+# 3. Split Data into Training and Validation Sets
+
+print("Splitting data into training and validation sets (80/20 split)...")
+
+X_train, X_val, y_train, y_val = train_test_split(
+
+X, y,test_size=0.2,
+
+random_state=42,
+
+stratify=y # Stratify to maintain class distribution in train/test splits
+
+)print(f"Training set size: {len(X_train)}")
+
+print(f"Validation set size: {len(X_val)}")
+
+# 4. Define the Model Pipeline
+
+# A pipeline makes it easy to chain preprocessing and modeling steps.
+
+# Step 1: TfidfVectorizer - Converts text to a matrix of TF-IDF features.
+
+# Step 2: LogisticRegression - A simple, effective baseline model for text classification.
+
+print("Defining the model pipeline...")
+
+pipeline = Pipeline([
+
+('tfidf', TfidfVectorizer(
+
+ngram_range=(1, 3), # Use unigrams, bigrams, and trigrams
+
+max_features=10000, # Limit the number of features to the top 10k
+
+stop_words='english'
+
+)),('clf', LogisticRegression(
+
+solver='liblinear', # Good for smaller datasets
+
+random_state=42,
+
+C=1.0 # Regularization strength
+
+))])# 5. Train the Model
+
+print("Training the model...")
+
+pipeline.fit(X_train, y_train)
+
+print("Model training complete.")
+
+# 6. Make Predictions on the Validation Set
+
+print("Making predictions on the validation set...")
+
+y_pred = pipeline.predict(X_val)
+
+y_pred_proba = pipeline.predict_proba(X_val)
+
+print("Predictions complete.")
+
+# 7. Evaluate the Model
+
+print("\n--- Model Evaluation Results ---")
+
+# Calculate metrics
+
+accuracy = accuracy_score(y_val, y_pred)
+
+loss = log_loss(y_val, y_pred_proba)
+
+f1_macro = f1_score(y_val, y_pred, average='macro')
+
+f1_weighted = f1_score(y_val, y_pred, average='weighted')
+
+# For multiclass, roc_auc_score needs probabilities and multi_class='ovr'
+
+roc_auc_ovr = roc_auc_score(y_val, y_pred_proba, multi_class='ovr', average='macro')
+
+roc_auc_ovr_weighted = roc_auc_score(y_val, y_pred_proba, multi_class='ovr', average='weighted')
+
+# Create a DataFrame for a clean display of results
+
+results_df = pd.DataFrame({
+
+Metric': [Accuracy',Log Loss',F1 Score (Macro)',
+
+F1 Score (Weighted)',
+
+ROC AUC (OVR Macro)',
+
+ROC AUC (OVR Weighted)'
+
+],Score': [accuracy,loss,f1_macro,f1_weighted,
+
+roc_auc_ovr,
+
+roc_auc_ovr_weighted
+
+]})print(results_df.to_string(index=False))
+
+print("--------------------------------\n")
