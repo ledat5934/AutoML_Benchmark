@@ -1,0 +1,864 @@
+PetFinder: 
+
+
+
+You are an expert programmer with years of experience in writing codes for machine learning (ML) tasks on Kaggle. Your goal is to write an end-to-end executable program that can solve the ML task based on the provided instructions. The user is trying to create a Python program for a supervised machine learning task. Your goal is to assist the user in creating the program. The user might provide the following information for the task:
+
+
+
+1. A description of the input data: The input data is multimodal, containing tabular data, text descriptions, and images for each pet profile.
+
+
+
+The tabular data in 'train.csv' includes the following fields:
+
+
+
+- `PetID`: Unique hash ID for the pet profile.
+
+
+
+- `Type`: Type of animal (1 for Dog, 2 for Cat).
+
+
+
+- `Name`: Name of the pet (can be empty).
+
+
+
+- `Age`: Age of the pet in months when listed.
+
+
+
+- `Breed1`: ID for the primary breed of the pet.
+
+
+
+- `Breed2`: ID for the secondary breed if the pet is a mixed breed.
+
+
+
+- `Gender`: Gender of the pet (1 for Male, 2 for Female, 3 for Mixed group).
+
+
+
+- `Color1`, `Color2`, `Color3`: IDs for the primary, secondary, and tertiary colors of the pet.
+
+
+
+- `MaturitySize`: Size at maturity (1=Small, 2=Medium, 3=Large, 4=Extra Large, 0=Not Specified).
+
+
+
+- `FurLength`: Fur length (1=Short, 2=Medium, 3=Long, 0=Not Specified).
+
+
+
+- `Vaccinated`: Vaccination status (1=Yes, 2=No, 3=Not Sure).
+
+
+
+- `Dewormed`: Deworming status (1=Yes, 2=No, 3=Not Sure).
+
+
+
+- `Sterilized`: Spayed/neutered status (1=Yes, 2=No, 3=Not Sure).
+
+
+
+- `Health`: Health condition (1=Healthy, 2=Minor Injury, 3=Serious Injury, 0=Not Specified).
+
+
+
+- `Quantity`: Number of pets represented in this profile.
+
+
+
+- `Fee`: Adoption fee in Malaysian Ringgit (0 for Free).
+
+
+
+- `State`: ID for the state location in Malaysia.
+
+
+
+- `RescuerID`: Unique hash ID of the rescuer.
+
+
+
+- `VideoAmt`: The number of videos uploaded for the pet.
+
+
+
+- `PhotoAmt`: The number of photos uploaded for the pet.
+
+
+
+The text data consists of:
+
+
+
+- `Description`: A profile write-up for the pet, primarily in English, with some in Malay or Chinese.
+
+
+
+The image and metadata consist of:
+
+
+
+- Photos for each pet.
+
+
+
+- Supplementary JSON files containing metadata from Google Vision API (image analysis) and Google Natural Language API (sentiment analysis of the description).
+
+
+
+2. A description of the output data:-- The output is a single categorical value named 'AdoptionSpeed'. This value is an integer ranging from 0 to 4, representing how quickly a pet was adopted:
+
+
+
+ -0: Same day.
+
+
+
+ -1: 1-7 days.
+
+
+
+- 2: 8-30 days.
+
+
+
+- 3: 31-90 days.
+
+
+
+- 4: Not adopted after 100 days.
+
+
+
+3. The task objective:-- For each pet profile, predict its 'AdoptionSpeed' category (0, 1, 2, 3, or 4) based on its combined tabular, text, and image data. This is a multi-class classification problem.
+
+
+
+4. The evaluation metrics:-- The primary evaluation metric is the Quadratic Weighted Kappa, which measures the agreement between the predicted and actual adoption speed ratings.
+
+
+
+5. A description of the available files:-- - `train.csv`: Contains the primary tabular and text data for training, including all features mentioned above and the 'AdoptionSpeed' label.
+
+
+
+- `breed_labels.csv`, `color_labels.csv`, `state_labels.csv`: Helper CSV files that map the Breed, Color, and State IDs to their respective human-readable names.
+
+
+
+- `train_images/`,`: Directories containing image files for each pet.
+
+
+
+- `train_metadata/`, `: Directories containing JSON files with image metadata.
+
+
+
+- `train_sentiment/`, : Directories containing JSON files with sentiment analysis data.
+
+
+
+6.Link to the data files:
+
+
+
+/kaggle/input/petfinder-adoption-prediction/train/train.csv
+
+
+
+/kaggle/input/petfinder-adoption-prediction/train_images
+
+
+
+/kaggle/input/petfinder-adoption-prediction/train_metadata
+
+
+
+/kaggle/input/petfinder-adoption-prediction/train_sentiment
+
+
+
+/kaggle/input/petfinder-adoption-prediction/breed_labels.csv
+
+
+
+/kaggle/input/petfinder-adoption-prediction/color_labels.csv
+
+
+
+/kaggle/input/petfinder-adoption-prediction/state_labels.csv
+
+
+
+split the train to evaluate by these folowing metrics: accuracy log_loss f1_macro f1_weighted roc_auc_ovr roc_auc_ovr_weighted
+
+
+
+use the newest version of each library you use
+
+below is an example of a task and its ground truth code:
+
+You are an expert programmer with years of experience in writing codes for machine learning (ML) tasks on Kaggle. Your goal is to write an end-to-end executable program that can solve the ML task based on the provided instructions. The user is trying to create a Python program for a supervised machine learning task. Your goal is to assist the user in creating the program. The user might provide the following information for the task:
+
+
+
+
+
+
+
+1. A description of the input data:The input data is multimodal, consisting of two parts for each sample:
+
+
+
+-Image Data: A JPEG image file.
+
+
+
+-Text Data (Optional): A short text caption that summarizes the image.
+
+
+
+
+
+
+
+2. A description of the output data: The output is a set of one or more labels for each image. There are 18 possible labels in total, represented by integers ranging from 1 to 19 (with the number 12 missing).
+
+
+
+
+
+
+
+3. The task objective: For each given sample, predict all applicable labels. Since a single image can have multiple labels simultaneously, this is a multi-label classification task. The model should be trained on images and can optionally use the text captions as additional input.
+
+
+
+
+
+
+
+4. The evaluation metrics: The evaluation metric for this competition is the Mean F1-Score.
+
+
+
+
+
+
+
+5. A description of the available files:
+
+
+
+- `train.csv`: The training set file. It contains three columns: `ImageID` (the filename of the image), `Labels` (a space-separated string of label numbers for that image), and `Caption` (the text caption).
+
+
+
+- `data/`: A directory containing all the image files in `.jpg` format.
+
+
+
+6.Link to the data files:
+
+
+
+/kaggle/input/multi-label-classification-competition-2025/COMP5329S1A2Dataset/train.csv
+
+
+
+/kaggle/input/multi-label-classification-competition-2025/COMP5329S1A2Dataset/data
+
+
+
+split the train to evaluate by these folowing metrics: accuracy log_loss f1_macro f1_weighted roc_auc_ovr roc_auc_ovr_weighted
+
+code:
+
+import os
+
+import pandas as pd
+
+import numpy as np
+
+from sklearn.model_selection import train_test_split
+
+from sklearn.preprocessing import MultiLabelBinarizer
+
+from PIL import Image
+
+import torch
+
+from torch.utils.data import Dataset, DataLoader
+
+import torch.nn as nn
+
+import torch.optim as optim
+
+from torchvision import transforms
+
+from transformers import AutoTokenizer, AutoModel
+
+import warnings
+
+from sklearn.metrics import accuracy_score, log_loss, f1_score, roc_auc_score
+
+from tqdm.notebook import tqdm
+
+
+
+# Tắt cảnh báo
+
+warnings.filterwarnings('ignore')
+
+
+
+# --- 1. Cấu hình và đường dẫn ---
+
+# Đường dẫn đến thư mục dữ liệu trên Kaggle
+
+KAGGLE_INPUT_PATH = '/kaggle/input/multi-label-classification-competition-2025/COMP5329S1A2Dataset'
+
+TRAIN_CSV_PATH = os.path.join(KAGGLE_INPUT_PATH, 'train.csv')
+
+IMAGE_DIR_PATH = os.path.join(KAGGLE_INPUT_PATH, 'data')
+
+
+
+# Tham số huấn luyện
+
+BATCH_SIZE = 32
+
+NUM_EPOCHS = 5 # Có thể tăng số epoch để đạt hiệu suất tốt hơn
+
+LEARNING_RATE = 1e-4
+
+IMAGE_SIZE = (224, 224) # Kích thước hình ảnh đầu vào cho ResNet
+
+BERT_MODEL_NAME = 'bert-base-uncased' # Có thể thử các mô hình khác như 'roberta-base'
+
+MAX_TEXT_LEN = 128 # Độ dài tối đa của caption
+
+
+
+# --- 2. Tải và khám phá dữ liệu ---
+
+print("Đang tải dữ liệu...")
+
+try:
+
+    df_train = pd.read_csv(TRAIN_CSV_PATH, on_bad_lines='skip')
+
+    print("Dữ liệu train.csv đã được tải thành công.")
+
+    print(f"Số lượng mẫu huấn luyện: {len(df_train)}")
+
+    print("5 hàng đầu tiên của train.csv:")
+
+    print(df_train.head())
+
+except FileNotFoundError:
+
+    print(f"Lỗi: Không tìm thấy file {TRAIN_CSV_PATH}. Vui lòng kiểm tra lại đường dẫn.")
+
+    exit()
+
+except Exception as e:
+
+    print(f"Lỗi khi tải train.csv: {e}")
+
+    exit()
+
+
+
+# Phân tích các nhãn duy nhất và tạo MultiLabelBinarizer
+
+# Các nhãn có thể là 1-19, thiếu 12.
+
+# Khôi phục tập hợp đầy đủ các nhãn có thể có từ dữ liệu
+
+all_possible_labels = sorted(list(set([label for sublist in df_train['Labels'].apply(lambda x: x.split()).tolist() for label in sublist])))
+
+# Đảm bảo các nhãn được sắp xếp để MultiLabelBinarizer nhất quán
+
+all_possible_labels_int = sorted([int(x) for x in all_possible_labels])
+
+# Tạo một danh sách các nhãn số nguyên theo thứ tự chính xác (1 đến 19, bỏ qua 12)
+
+# Đây là cách chính xác để xử lý khi nhãn 12 bị thiếu
+
+all_labels_expected = [str(i) for i in range(1, 20) if i != 12]
+
+mlb = MultiLabelBinarizer(classes=all_labels_expected)
+
+mlb.fit(df_train['Labels'].apply(lambda x: x.split())) # Phù hợp với tất cả các nhãn xuất hiện trong dữ liệu
+
+
+
+print(f"\nTổng số nhãn duy nhất: {len(mlb.classes_)}")
+
+print(f"Các nhãn được mã hóa: {mlb.classes_}")
+
+
+
+# --- 3. Tiền xử lý dữ liệu và Tạo Dataset ---
+
+class MultiModalDataset(Dataset):
+
+    def __init__(self, dataframe, image_dir, tokenizer, transform=None, max_text_len=MAX_TEXT_LEN, mlb_encoder=None):
+
+        self.dataframe = dataframe
+
+        self.image_dir = image_dir
+
+        self.tokenizer = tokenizer
+
+        self.transform = transform
+
+        self.max_text_len = max_text_len
+
+        self.mlb_encoder = mlb_encoder
+
+
+
+    def __len__(self):
+
+        return len(self.dataframe)
+
+
+
+    def __getitem__(self, idx):
+
+        row = self.dataframe.iloc[idx]
+
+        img_id = row['ImageID']
+
+        labels = row['Labels'].split()
+
+        caption = row['Caption']
+
+
+
+        # Xử lý hình ảnh
+
+        img_path = os.path.join(self.image_dir, f"{img_id}")
+
+        try:
+
+            image = Image.open(img_path).convert("RGB")
+
+            if self.transform:
+
+                image = self.transform(image)
+
+        except FileNotFoundError:
+
+            # [Suy luận] Nếu không tìm thấy hình ảnh, có thể trả về một tensor hình ảnh rỗng hoặc xử lý ngoại lệ
+
+            # Ở đây, tôi sẽ trả về một tensor hình ảnh rỗng và cảnh báo
+
+            print(f"[Suy luận] Cảnh báo: Không tìm thấy hình ảnh {img_path}. Trả về tensor hình ảnh rỗng.")
+
+            image = torch.zeros(3, IMAGE_SIZE[0], IMAGE_SIZE[1]) # Placeholder for missing image
+
+        except Exception as e:
+
+            print(f"Lỗi khi tải hoặc xử lý hình ảnh {img_path}: {e}")
+
+            image = torch.zeros(3, IMAGE_SIZE[0], IMAGE_SIZE[1]) # Placeholder for error
+
+
+
+        # Xử lý văn bản
+
+        text_inputs = self.tokenizer(
+
+            caption,
+
+            add_special_tokens=True,
+
+            max_length=self.max_text_len,
+
+            padding='max_length',
+
+            truncation=True,
+
+            return_tensors='pt'
+
+        )
+
+        input_ids = text_inputs['input_ids'].squeeze(0)
+
+        attention_mask = text_inputs['attention_mask'].squeeze(0)
+
+
+
+        # Xử lý nhãn (chuyển đổi sang one-hot encoding)
+
+        # mlb_encoder.transform yêu cầu một list of lists
+
+        target = self.mlb_encoder.transform([labels]).squeeze(0)
+
+        target = torch.tensor(target, dtype=torch.float32)
+
+
+
+        return image, input_ids, attention_mask, target
+
+
+
+# Biến đổi hình ảnh
+
+image_transform = transforms.Compose([
+
+    transforms.Resize(IMAGE_SIZE),
+
+    transforms.ToTensor(),
+
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+
+])
+
+
+
+# Khởi tạo Tokenizer cho BERT
+
+print(f"Đang tải tokenizer cho mô hình {BERT_MODEL_NAME}...")
+
+tokenizer = AutoTokenizer.from_pretrained(BERT_MODEL_NAME)
+
+
+
+# Chia tập dữ liệu huấn luyện thành train và validation
+
+# [Phỏng đoán] Tỷ lệ 80/20 là một lựa chọn phổ biến cho chia tập dữ liệu
+
+train_df, val_df = train_test_split(df_train, test_size=0.2, random_state=42)
+
+print(f"\nSố lượng mẫu huấn luyện: {len(train_df)}")
+
+print(f"Số lượng mẫu validation: {len(val_df)}")
+
+
+
+train_dataset = MultiModalDataset(train_df, IMAGE_DIR_PATH, tokenizer, image_transform, mlb_encoder=mlb)
+
+val_dataset = MultiModalDataset(val_df, IMAGE_DIR_PATH, tokenizer, image_transform, mlb_encoder=mlb)
+
+
+
+train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=2)
+
+val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=2)
+
+
+
+# --- 4. Xây dựng kiến trúc mô hình ---
+
+class MultiLabelClassifier(nn.Module):
+
+    def __init__(self, num_labels, image_model_name='resnet18', text_model_name=BERT_MODEL_NAME):
+
+        super(MultiLabelClassifier, self).__init__()
+
+
+
+        # Mô hình hình ảnh
+
+        # Sử dụng torchvision.models để tải mô hình tiền huấn luyện
+
+        if image_model_name == 'resnet18':
+
+            self.image_model = torch.hub.load('pytorch/vision:v0.10.0', 'resnet18', pretrained=True)
+
+            self.image_model.fc = nn.Identity() # Loại bỏ lớp phân loại cuối cùng
+
+            image_output_dim = 512 # Đặc trưng đầu ra của ResNet18 trước lớp FC
+
+        else:
+
+            # [Suy luận] Có thể mở rộng để sử dụng các mô hình khác
+
+            raise ValueError(f"Mô hình hình ảnh '{image_model_name}' chưa được hỗ trợ.")
+
+
+
+        # Mô hình văn bản
+
+        self.text_model = AutoModel.from_pretrained(text_model_name)
+
+        text_output_dim = self.text_model.config.hidden_size # Kích thước đầu ra của mô hình BERT
+
+
+
+        # Lớp kết hợp và phân loại
+
+        # [Phỏng đoán] Một lớp tuyến tính đơn giản sau khi nối các đặc trưng
+
+        self.fc_combined = nn.Sequential(
+
+            nn.Linear(image_output_dim + text_output_dim, 512), # Lớp kết hợp
+
+            nn.ReLU(),
+
+            nn.Dropout(0.3),
+
+            nn.Linear(512, num_labels) # Lớp phân loại cuối cùng
+
+        )
+
+
+
+    def forward(self, image_input, input_ids, attention_mask):
+
+        # Trích xuất đặc trưng hình ảnh
+
+        image_features = self.image_model(image_input)
+
+
+
+        # Trích xuất đặc trưng văn bản
+
+        # Lấy [CLS] token embedding làm đại diện cho toàn bộ chuỗi
+
+        text_outputs = self.text_model(input_ids=input_ids, attention_mask=attention_mask)
+
+        text_features = text_outputs.last_hidden_state[:, 0, :] # Lấy [CLS] token
+
+
+
+        # Kết hợp các đặc trưng
+
+        combined_features = torch.cat((image_features, text_features), dim=1)
+
+
+
+        # Phân loại
+
+        logits = self.fc_combined(combined_features)
+
+        return logits
+
+
+
+# Khởi tạo mô hình
+
+num_labels = len(mlb.classes_)
+
+model = MultiLabelClassifier(num_labels=num_labels)
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+model.to(device)
+
+print(f"\nThiết bị được sử dụng để huấn luyện: {device}")
+
+print("Kiến trúc mô hình:")
+
+print(model)
+
+
+
+# --- 5. Huấn luyện mô hình ---
+
+criterion = nn.BCEWithLogitsLoss() # Hàm mất mát cho phân loại đa nhãn
+
+optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
+
+
+
+print("\nBắt đầu huấn luyện...")
+
+best_val_f1_macro = -1.0
+
+
+
+for epoch in range(NUM_EPOCHS):
+
+    model.train()
+
+    train_loss = 0.0
+
+    for images, input_ids, attention_mask, targets in tqdm(train_loader, desc=f"Epoch {epoch+1} Train"):
+
+        images, input_ids, attention_mask, targets = images.to(device), input_ids.to(device), attention_mask.to(device), targets.to(device)
+
+
+
+        optimizer.zero_grad()
+
+        outputs = model(images, input_ids, attention_mask)
+
+        loss = criterion(outputs, targets)
+
+        loss.backward()
+
+        optimizer.step()
+
+        train_loss += loss.item() * images.size(0)
+
+
+
+    train_loss = train_loss / len(train_loader.dataset)
+
+
+
+    # Đánh giá trên tập validation
+
+    model.eval()
+
+    val_preds = []
+
+    val_targets = []
+
+    val_loss = 0.0
+
+    with torch.no_grad():
+
+        for images, input_ids, attention_mask, targets in tqdm(val_loader, desc=f"Epoch {epoch+1} Val"):
+
+            images, input_ids, attention_mask, targets = images.to(device), input_ids.to(device), attention_mask.to(device), targets.to(device)
+
+            outputs = model(images, input_ids, attention_mask)
+
+            loss = criterion(outputs, targets)
+
+            val_loss += loss.item() * images.size(0)
+
+
+
+            # Áp dụng sigmoid để nhận xác suất, sau đó chuyển thành dự đoán nhị phân
+
+            probs = torch.sigmoid(outputs).cpu().numpy()
+
+            val_preds.extend(probs)
+
+            val_targets.extend(targets.cpu().numpy())
+
+
+
+    val_loss = val_loss / len(val_loader.dataset)
+
+    val_preds_np = np.array(val_preds)
+
+    val_targets_np = np.array(val_targets)
+
+
+
+    # [Suy luận] Ngưỡng 0.5 là một điểm khởi đầu phổ biến cho phân loại đa nhãn.
+
+    val_preds_binary = (val_preds_np > 0.5).astype(int)
+
+
+
+    # --- 6. Đánh giá mô hình ---
+
+    print(f"\n--- Kết quả Epoch {epoch+1}/{NUM_EPOCHS} ---")
+
+    print(f"Train Loss: {train_loss:.4f}")
+
+    print(f"Validation Loss: {val_loss:.4f}")
+
+
+
+    # Accuracy (Exact Match Ratio)
+
+    # [Suy luận] Đối với multi-label, thường sử dụng Exact Match Ratio hoặc subset accuracy
+
+    accuracy = accuracy_score(val_targets_np, val_preds_binary)
+
+    print(f"Validation Accuracy (Exact Match): {accuracy:.4f}")
+
+
+
+    # Log Loss
+
+    # Đảm bảo không có giá trị 0 hoặc 1 chính xác trước khi tính log_loss
+
+    # log_loss yêu cầu xác suất, không phải nhị phân
+
+    val_preds_np_clipped = np.clip(val_preds_np, 1e-15, 1 - 1e-15)
+
+    logloss = log_loss(val_targets_np, val_preds_np_clipped)
+
+    print(f"Validation Log Loss: {logloss:.4f}")
+
+
+
+    # F1-Score Macro
+
+    f1_macro = f1_score(val_targets_np, val_preds_binary, average='macro', zero_division=0)
+
+    print(f"Validation F1-Macro: {f1_macro:.4f}")
+
+
+
+    # F1-Score Weighted
+
+    f1_weighted = f1_score(val_targets_np, val_preds_binary, average='weighted', zero_division=0)
+
+    print(f"Validation F1-Weighted: {f1_weighted:.4f}")
+
+
+
+    # ROC AUC OvR (One-vs-Rest)
+
+    # Cần kiểm tra xem có đủ mẫu cho mỗi lớp trong tập validation để tính ROC AUC không
+
+    try:
+
+        roc_auc_ovr = roc_auc_score(val_targets_np, val_preds_np, average='macro', multi_class='ovr')
+
+        print(f"Validation ROC AUC OvR (Macro): {roc_auc_ovr:.4f}")
+
+    except ValueError as e:
+
+        print(f"[Cảnh báo] Không thể tính ROC AUC OvR (Macro): {e}. Có thể có quá ít mẫu của một lớp trong tập validation.")
+
+        roc_auc_ovr = 0.0 # Gán giá trị mặc định
+
+
+
+    # ROC AUC OvR Weighted
+
+    try:
+
+        roc_auc_ovr_weighted = roc_auc_score(val_targets_np, val_preds_np, average='weighted', multi_class='ovr')
+
+        print(f"Validation ROC AUC OvR (Weighted): {roc_auc_ovr_weighted:.4f}")
+
+    except ValueError as e:
+
+        print(f"[Cảnh báo] Không thể tính ROC AUC OvR (Weighted): {e}. Có thể có quá ít mẫu của một lớp trong tập validation.")
+
+        roc_auc_ovr_weighted = 0.0 # Gán giá trị mặc định
+
+
+
+    # Lưu mô hình nếu F1-Macro tốt hơn
+
+    if f1_macro > best_val_f1_macro:
+
+        best_val_f1_macro = f1_macro
+
+        # [Phỏng đoán] Lưu trạng thái mô hình
+
+        # Lưu vào /kaggle/working/ để sau này có thể tải lên lại
+
+        torch.save(model.state_dict(), 'best_multi_label_model.pth')
+
+        print(f"Đã lưu mô hình tốt nhất với F1-Macro: {best_val_f1_macro:.4f}")
+
+
+
+print("\nQuá trình huấn luyện hoàn tất.")
+
+print(f"F1-Macro tốt nhất trên tập validation: {best_val_f1_macro:.4f}")
+
