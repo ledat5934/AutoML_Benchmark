@@ -1,0 +1,45 @@
+PlantTraits2024 - FGVC11
+
+You are an expert programmer with years of experience in writing codes for machine learning (ML) tasks on Kaggle. Your goal is to write an end-to-end executable program that can solve the ML task based on the provided instructions.  The user is trying to create a Python program for a supervised machine learning task. Your goal is to assist the user in creating the program. The user might provide the following information for the task:
+
+
+
+1. A description of the input data:The input data is multimodal, consisting of two main types for each sample:
+
+- Image Data: A crowd-sourced photograph of a plant (`.jpeg`).
+
+-Tabular Ancillary Data: A set of geographical and environmental features associated with the image's location. This includes climate data (WORLDCLIM), soil data (SOIL), and multi-temporal satellite data (MODIS, VOD).
+
+
+
+2. A description of the output data:The output consists of 6 continuous numerical values. Each value is a prediction for one of the 6 vital plant traits ('X11_mean', 'X50_mean', 'X26_mean', 'X4_mean', 'X3112_mean', 'X18_mean'), representing properties like leaf area or plant height.
+
+
+
+3. The task objective: For each sample, predict the values for all 6 plant traits based on the plant image and its associated ancillary data. This is a multi-output regression task that requires a multi-modal model to handle both image and tabular inputs.
+
+
+
+4. The evaluation metrics: The evaluation metric is the mean R-squared (R2) score, averaged over all 6 predicted traits.
+
+
+
+5. A description of the available files:
+
+- `train.csv`: Contains the training data. For each `id`, it includes the target values for the 6 plant traits (columns named `X[*]_mean`) and all the ancillary tabular data (columns like `WORLDCLIM_BIO[*]`, `SOIL_[*]`, etc.).
+
+- `train_images/`: A directory containing the training images, with filenames corresponding to the `id` in `train.csv`.
+
+- `target_name_meta.csv`: A helper file providing the full names and descriptions for each trait ID.
+
+6.Link to the data files:
+
+/kaggle/input/planttraits2024/train_images
+
+/kaggle/input/planttraits2024/target_name_meta.tsv
+
+/kaggle/input/planttraits2024/train.csv
+
+split the train to evaluate by these folowing metrics: accuracy log_loss f1_macro f1_weighted roc_auc_ovr roc_auc_ovr_weighted
+
+use the newest version of each library you use
