@@ -1,4 +1,4 @@
-Yêu cầu: có thư viện openai
+Yêu cầu: có thư viện openai\n
 Cách chạy:
 
 - python main.py dataset_path e.g python main.py ./input/titanic
