@@ -1,0 +1,36 @@
+# Stage 2 – Model Training & Evaluation
+
+Dataset: {{ project.name }}
+
+Continue from **Stage 1**. `train_df_processed` is already available and includes the target column specified in the JSON description.
+
+Tasks:
+1. Separate `train_df_processed` into `X` (features) and `y` (target).
+2. Perform an **80 / 20 stratified split** into training and validation sets using `train_test_split(random_state=RANDOM_STATE, stratify=y)`.
+3. Build a **model automatically suited to the task type**. Examples:
+    • **Tabular**: Gradient Boosting (`LightGBM`, `CatBoost`, `XGBoost`), `RandomForest`.
+    • **Image**: Fine-tune a pre-trained CNN (e.g. EfficientNet, ResNet, ConvNeXt) or use a Vision Transformer – you may implement in **PyTorch** *or* **TensorFlow/Keras**.
+    • **Text**: Fine-tune a transformer (e.g. BERT, RoBERTa) using HuggingFace 🤗 (either PyTorch or TensorFlow backend).
+    • **Multimodal**: Combine extracted embeddings or use a fusion network.
+    • You may choose deep learning frameworks (PyTorch, TensorFlow/Keras) when beneficial.
+4. Fit the model on the training split. Use early stopping on the validation split (100 rounds).
+5. Evaluate and **print** multiple metrics:
+   • Classification → Accuracy, F1, LogLoss.
+   • Regression → RMSE, MAE, R².
+6. Persist the trained model to `models/model.pkl` with `joblib.dump`.
+7. Return the trained model instance as `trained_model`.
+
+Assume `RANDOM_STATE = 42` is already defined.
+
+Reference – Stage 1 code:
+```python
+{{ prev_code }}
+```
+
+Response format:
+```python
+# === STAGE 2 START ===
+<your code here>
+# === STAGE 2 END ===
+```
+Return **only** the code snippet – no commentary. 

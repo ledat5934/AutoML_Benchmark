@@ -1,0 +1,29 @@
+# Stage 3 – Inference & Submission
+
+Dataset: {{ project.name }}
+
+Continue from **Stage 2** to generate predictions and a Kaggle-ready submission file.
+
+Tasks:
+1. Ensure `trained_model` is available. If it is `None`, load the model from `models/model.pkl` using `joblib.load`.
+2. Load `test_df_processed` (from memory or `processed/test_processed.csv`).
+3. Generate predictions:
+   • Classification → `predict_proba` probabilities or class labels depending on competition format.
+   • Regression → continuous predictions.
+4. Build `submission_df` following the sample submission format (column names and index order).
+   • If a sample submission is provided (path detected by analyzer), respect its structure.
+5. Save the submission to `outputs/submission.csv` inside the project directory.
+6. Print a short confirmation message with the path to the generated file.
+
+Reference – Stage 1 & 2 code:
+```python
+{{ prev_code }}
+```
+
+Response format:
+```python
+# === STAGE 3 START ===
+<your code here>
+# === STAGE 3 END ===
+```
+Return **only** the code snippet – no commentary. 

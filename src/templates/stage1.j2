@@ -1,0 +1,31 @@
+# Stage 1 – Data Loading & Pre-processing
+
+Dataset: {{ project.name }}
+
+You are an expert Kaggle competitor. Using the task description in the accompanying JSON file and the EDA report below, write a self-contained **Python** module that performs data loading and preprocessing.
+
+Requirements:
+1. Use appropriate libraries to load the training and test data located at the paths detected in the project directory.
+2. Perform robust preprocessing:
+   • Identify numerical vs. categorical vs. text vs. image columns automatically.
+   • Impute missing numerical values with the median, categorical with the mode (or constant "missing").
+   • One-hot-encode categorical columns (drop_first=False).
+   • For free-text columns, create TF-IDF (or a tokenizer compatible with transformers if Stage 2 plans to use them).
+   • For image paths, implement a lightweight loader – either a PyTorch `Dataset` **or** a TensorFlow `tf.data` pipeline – that loads, resizes (e.g. 224×224), and normalizes images; optionally extract embeddings via a pre-trained backbone (e.g. EfficientNet-B0) so they can be merged later.
+   • Scale numerical features with `StandardScaler` (store the scaler for later reuse).
+   • Handle any other preprocessing steps as needed (feature selection, feature engineering, etc.).
+3. Return two processed `pandas.DataFrame`s named `train_df_processed` and `test_df_processed` and other processed data if any item.
+4. Persist the processed CSVs to a folder `processed/` inside the project directory as `train_processed.csv` and `test_processed.csv`.
+5. Keep a deterministic workflow: set `RANDOM_STATE = 42` and use it wherever randomness is involved.
+6. Wrap the script in a `def main()` so it can be executed directly **or** imported.
+
+Exploratory Data Analysis (context):
+{{ analysis_report }}
+
+Response format:
+```python
+# === STAGE 1 START ===
+<your code here>
+# === STAGE 1 END ===
+```
+Return **only** the code snippet – no commentary. 
