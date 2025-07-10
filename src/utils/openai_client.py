@@ -21,9 +21,18 @@ class OpenAIClient:
 
     def __post_init__(self) -> None:  # type: ignore[override]
         # Initialize OpenAI sdk client (v1)
+        # Sanitize custom base URL (if provided) to avoid accidental duplication of path segments
+        base_url = self.config.OPENAI_API_URL
+        if base_url:
+            # remove surrounding quotes and whitespace
+            base_url = base_url.strip().strip('"').strip("'").rstrip("/")
+            # If user accidentally included the endpoint suffix, strip it
+            for suffix in ("/chat/completions", "chat/completions"):
+                if base_url.endswith(suffix):
+                    base_url = base_url[: -len(suffix)]
         self.client = OpenAI(
             api_key=self.config.OPENAI_API_KEY,
-            base_url=self.config.OPENAI_API_URL or None,
+            base_url=base_url or None,
         )
 
     def chat_completion(

@@ -50,6 +50,23 @@ class CodeGenerator:
                     collected.append(ln)
             code_block = "\n".join(collected)
         else:
-            code_block = raw_response
+            # Attempt to strip triple backtick fenced blocks
+            if "```" in raw_response:
+                segments = raw_response.split("```")
+                # The code segment is typically after the first fence (index 1)
+                # but sometimes model responds with language spec; handle both
+                for seg in segments[1:]:
+                    if seg.strip() == "":
+                        continue
+                    # Remove possible language tag (e.g., python) on first line
+                    first_nl = seg.find("\n")
+                    if first_nl != -1:
+                        tentative_code = seg[first_nl + 1 :]
+                    else:
+                        tentative_code = seg
+                    code_block = tentative_code
+                    break
+            else:
+                code_block = raw_response
         self.validate(code_block)
         return code_block 

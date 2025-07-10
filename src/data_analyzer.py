@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List
@@ -15,42 +14,44 @@ class ProjectInfo:
     """Metadata describing one ML project discovered in the input folder."""
 
     name: str
-    json_path: Path
+    desc_path: Path  # points to *description.txt*
     project_dir: Path
     data_files: Dict[str, List[Path]] = field(default_factory=dict)
 
 
 class DataAnalyzer:
-    """Walk a root directory, locate project description JSON files and associated data."""
+    """Walk a root directory, locate *description.txt* files and associated data."""
 
     SUPPORTED_DATA_EXTS: set[str] = {".csv", ".parquet"}
 
     def analyze(self, root: Path) -> List[ProjectInfo]:
-        """Return list of ProjectInfo for every project json found under *root*."""
+        """Return list of ProjectInfo for every project description found under *root*."""
         if not root.exists():
             raise FileNotFoundError(f"Path {root} does not exist")
 
         projects: List[ProjectInfo] = []
 
-        for json_file in root.rglob("*.json"):
-            if not self._looks_like_project_json(json_file):
-                continue
-
-            project_dir = json_file.parent
-            name = self._infer_project_name(json_file)
-            data_files = self._collect_data_files(project_dir, json_file)
+        for desc_file in root.rglob("description.txt"):
+            project_dir = desc_file.parent
+            name = self._infer_project_name(desc_file)
+            data_files = self._collect_data_files(project_dir, desc_file)
             projects.append(
                 ProjectInfo(
                     name=name,
-                    json_path=json_file,
+                    desc_path=desc_file,
                     project_dir=project_dir,
                     data_files=data_files,
                 )
             )
-            logger.debug("Detected project '%s' with %d data files", name, sum(len(v) for v in data_files.values()))
+            logger.debug(
+                "Detected project '%s' with %d data files (description at %s)",
+                name,
+                sum(len(v) for v in data_files.values()),
+                desc_file,
+            )
 
         if not projects:
-            logger.warning("No project JSON files found under %s", root)
+            logger.warning("No project description.txt files found under %s", root)
         return projects
 
     def build_eda_report(self, project: ProjectInfo) -> str:
@@ -59,12 +60,17 @@ class DataAnalyzer:
 
         lines: list[str] = [f"# EDA Report for {project.name}"]
         # Heuristic: find file containing 'train' in name
-        train_files = [p for key, lst in project.data_files.items() for p in lst if "train" in key.lower()]
+        train_files = [p for lst in project.data_files.values() for p in lst if "train" in str(p).lower()]
         if train_files:
             train_path = train_files[0]
             df = pd.read_csv(train_path, nrows=5000)  # sample first 5k rows
             lines.append(f"Train file: {train_path}")
-            lines.append(df.info(verbose=True, show_counts=True, memory_usage="deep").to_string())
+
+            from io import StringIO
+
+            info_buf = StringIO()
+            df.info(buf=info_buf, verbose=True, show_counts=True, memory_usage="deep")
+            lines.append(info_buf.getvalue())
             desc = df.describe(include="all").T
             lines.append("\nDescriptive stats:\n" + desc.to_string())
         else:
@@ -74,29 +80,20 @@ class DataAnalyzer:
     # ---------------------------------------------------------------------
     # Helpers
     # ---------------------------------------------------------------------
-    def _looks_like_project_json(self, path: Path) -> bool:
-        """Quick heuristic: must contain the key \"competition_brief\" in first 4 KB."""
-        try:
-            with open(path, "r", encoding="utf-8") as fp:
-                snippet = fp.read(4096)
-            return "\"competition_brief\"" in snippet
-        except Exception:
-            return False
 
-    def _infer_project_name(self, json_path: Path) -> str:
-        try:
-            with open(json_path, "r", encoding="utf-8") as fp:
-                data = json.load(fp)
-            return data.get("kaggle_dataset_name", json_path.stem)
-        except Exception:
-            return json_path.stem
+    # Previously we inspected JSON structure; for plain text description we just accept any file named
+    # *description.txt*, so no extra validation helper is needed.
 
-    def _collect_data_files(self, project_dir: Path, json_path: Path) -> Dict[str, List[Path]]:
+    def _infer_project_name(self, desc_path: Path) -> str:
+        """Use parent folder name as project name if we cannot parse more from description."""
+        return desc_path.parent.name
+
+    def _collect_data_files(self, project_dir: Path, desc_path: Path) -> Dict[str, List[Path]]:
         files: Dict[str, List[Path]] = {}
         for ext in self.SUPPORTED_DATA_EXTS:
             for p in project_dir.rglob(f"*{ext}"):
-                # skip the project json file and any potential helper label jsons
-                if p == json_path:
+                # skip the description file
+                if p == desc_path:
                     continue
                 key = p.stem
                 files.setdefault(key, []).append(p)

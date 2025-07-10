@@ -17,9 +17,10 @@ class PromptBuilder:
     def __init__(self, templates_dir: Optional[Path] = None) -> None:
         if templates_dir is None:
             templates_dir = Path(__file__).parent / "templates"
+        # Disable autoescaping entirely because templates generate plain text prompts, not HTML.
         self.env = Environment(
             loader=FileSystemLoader(str(templates_dir)),
-            autoescape=select_autoescape(disabled=True),
+            autoescape=False,
             trim_blocks=True,
             lstrip_blocks=True,
         )
@@ -35,14 +36,25 @@ class PromptBuilder:
         project: ProjectInfo,
         analysis_report: str,
         prev_code: str = "",
+        accelerator: Optional[str] = None,
     ) -> List[Dict[str, str]]:
         """Return list of messages to feed ChatCompletion for given stage."""
         template_name = f"stage{stage}.j2"
         template = self._load_template(template_name)
+        # Read contest/task description from description.txt, if available
+        description_text = ""
+        try:
+            with open(project.desc_path, "r", encoding="utf-8") as f:
+                description_text = f.read()
+        except Exception as exc:
+            logger.warning("Could not read description.txt at %s: %s", project.desc_path, exc)
+
         prompt_text = template.render(
             project=project,
             analysis_report=analysis_report,
             prev_code=prev_code,
+            description_text=description_text,
+            accelerator=accelerator,
         )
         messages: List[Dict[str, str]] = [
             {"role": "system", "content": "You are a senior ML engineer."},

@@ -2,17 +2,24 @@
 
 Dataset: {{ project.name }}
 
-Continue from **Stage 2** to generate predictions and a Kaggle-ready submission file.
+{% if accelerator %}
+Hardware accelerator requested: {{ accelerator }}
+{% endif %}
+
+Contest / Task Description (context):
+{{ description_text }}
+
+Continue from **Stage 2** to generate predictions and a Kaggle-ready submission file. Remember that `test_df_processed` contains **only feature columns** (no target/label).
 
 Tasks:
 1. Ensure `trained_model` is available. If it is `None`, load the model from `models/model.pkl` using `joblib.load`.
-2. Load `test_df_processed` (from memory or `processed/test_processed.csv`).
+2. Declare `TEST_PROCESSED_PATH = "./processed/test_processed.csv"` at the top, then load `test_df_processed` from that path (or memory).
 3. Generate predictions:
    • Classification → `predict_proba` probabilities or class labels depending on competition format.
    • Regression → continuous predictions.
 4. Build `submission_df` following the sample submission format (column names and index order).
    • If a sample submission is provided (path detected by analyzer), respect its structure.
-5. Save the submission to `outputs/submission.csv` inside the project directory.
+5. Declare `SUBMISSION_PATH = "./outputs/submission.csv"` at the top and save the submission there.
 6. Print a short confirmation message with the path to the generated file.
 
 Reference – Stage 1 & 2 code:
