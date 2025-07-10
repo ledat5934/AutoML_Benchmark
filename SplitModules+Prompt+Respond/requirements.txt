@@ -1,0 +1,15 @@
+pandas
+ydata-profiling
+tqdm
+google-generativeai
+python-dotenv
+bs4
+scikit-learn
+lightgbm
+nltk
+transformers
+torch
+sentence-transformers
+transformers[torch]
+torchvision
+gensim
