@@ -12,21 +12,19 @@ from dotenv import load_dotenv
 class Config:
     """Holds environment configuration loaded from `.env`."""
 
-    OPENAI_API_KEY: str
-    OPENAI_MODEL: str = "gpt-4o-mini"
-    OPENAI_API_URL: Optional[str] = None
+    GEMINI_API_KEY: str
+    GEMINI_MODEL: str = "gemini-2.5-flash"
 
     @classmethod
     def from_env(cls) -> "Config":
         """Load variables from environment / .env file and return Config instance."""
         # Load variables from .env into environment if present
         load_dotenv()
-        key = os.getenv("OPENAI_API_KEY")
-        model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-        url = os.getenv("OPENAI_API_URL")
+        key = os.getenv("GEMINI_API_KEY")
+        model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
         if not key:
-            raise RuntimeError("OPENAI_API_KEY is not set in environment or .env")
-        return cls(OPENAI_API_KEY=key, OPENAI_MODEL=model, OPENAI_API_URL=url)
+            raise RuntimeError("GEMINI_API_KEY is not set in environment or .env")
+        return cls(GEMINI_API_KEY=key, GEMINI_MODEL=model)
 
 
 def load_config() -> Config:

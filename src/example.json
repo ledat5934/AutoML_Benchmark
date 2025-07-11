@@ -1,0 +1,101 @@
+{
+  "dataset_info": {
+    "name": "Whale and Dolphin Identification",
+    "base_path": "/path/to/your/dataset/happy-whale-and-dolphin/",
+    "files": [
+      {
+        "path": "train.csv",
+        "role": "train",
+        "type": "csv"
+      },
+      {
+        "path": "test.csv",
+        "role": "test",
+        "type": "csv"
+      },
+      {
+        "path": "train_images/",
+        "role": "train_images",
+        "type": "image_folder"
+      },
+      {
+        "path": "test_images/",
+        "role": "test_images",
+        "type": "image_folder"
+      },
+      {
+        "path": "sample_submission.csv",
+        "role": "submission_example",
+        "type": "csv"
+      }
+    ]
+  },
+  "profiling_summary": {
+    "overview": {
+      "number_of_variables": 3,
+      "number_of_observations": 51033,
+      "missing_cells": 0,
+      "missing_cells_percentage": "0.0%",
+      "duplicate_rows": 0
+    },
+    "variables": {
+      "image": {
+        "type": "ID",
+        "stats": {
+          "count": 51033,
+          "distinct": 51033,
+          "is_unique": true,
+          "missing": 0
+        }
+      },
+      "species": {
+        "type": "Categorical",
+        "stats": {
+          "count": 51033,
+          "distinct": 30,
+          "missing": 0,
+          "top_values": [
+            { "value": "bottlenose_dolphin", "count": 9664 },
+            { "value": "humpback_whale", "count": 7393 },
+            { "value": "beluga", "count": 4342 }
+          ]
+        }
+      },
+      "individual_id": {
+        "type": "ID / Target",
+        "stats": {
+          "count": 51033,
+          "distinct": 15587,
+          "is_unique": false,
+          "missing": 0
+        }
+      }
+    }
+  },
+  "task_definition": {
+    "problem_type": "Multi-class Classification",
+    "objective": "From each image, predict the unique identifier ('individual_id') of the whale or dolphin.",
+    "target_column": {
+      "name": "individual_id",
+      "description": "The label column to be predicted, representing the unique ID of each individual animal."
+    },
+    "feature_columns": {
+      "image_features": [
+        {
+          "column_name": "image",
+          "description": "The image filename corresponding to each data row.",
+          "image_directory": "train_images/",
+          "file_extension": ".jpg"
+        }
+      ],
+      "categorical_features": [
+        {
+          "column_name": "species",
+          "description": "The species of the animal in the image, can be used as a supplementary feature."
+        }
+      ],
+      "text_features": [],
+      "numerical_features": []
+    }
+  }
+}

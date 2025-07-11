@@ -12,7 +12,7 @@ from src.data_analyzer import DataAnalyzer, ProjectInfo
 from src.prompt_builder import PromptBuilder
 from src.code_generator import CodeGenerator
 from src.file_assembler import FileAssembler
-from src.utils.openai_client import OpenAIClient
+from src.utils.gemini_client import GeminiClient
 
 
 def _parse_args() -> argparse.Namespace:
@@ -79,7 +79,17 @@ def main() -> None:
 
         # Initialize helpers
         prompt_builder = PromptBuilder()
-        openai_client = OpenAIClient(config)
+        gemini_client = GeminiClient(config)
+        # NEW: generate <dataset>.json metadata file
+        # Build dataset metadata JSON once – reuse for error regeneration prompts
+        dataset_json_path = None
+        dataset_json_content = ""
+        try:
+            dataset_json_path = analyzer.generate_dataset_json(project, openai_client=gemini_client)
+            dataset_json_content = dataset_json_path.read_text(encoding="utf-8")
+        except Exception as exc:
+            logger.error("Failed to create dataset JSON for project %s: %s", project.name, exc)
+
         codegen = CodeGenerator()
         stage_paths: List[Path] = []
         stage_prompts: List[str] = []  # store original prompts for potential regeneration
@@ -88,21 +98,22 @@ def main() -> None:
 
         # Generate stages 1..3
         for stage in (1, 2, 3):
-            logger.info("Generating Stage %d code via OpenAI...", stage)
+            logger.info("Generating Stage %d code via Gemini...", stage)
             messages = prompt_builder.build_stage_prompt(
                 stage,
                 project,
                 analysis_report,
                 prev_code,
                 accelerator,
+                dataset_json_content,
             )
 
             # Keep a copy of the user-facing prompt so we can resend it if we need to regenerate
             stage_prompts.append(messages[1]["content"])
             try:
-                response_content = openai_client.chat_completion(messages, temperature=0)
+                response_content = gemini_client.chat_completion(messages, temperature=0)
             except Exception as exc:
-                logger.error("OpenAI request failed: %s", exc)
+                logger.error("Gemini request failed: %s", exc)
                 raise SystemExit(1)
 
             code_block = codegen.validate_and_extract(response_content)
@@ -185,25 +196,58 @@ def main() -> None:
             stage_paths_regen: List[Path] = []
 
             for stage in (1, 2, 3):
-                original_prompt = stage_prompts[stage - 1]
-                original_code = stage_code_blocks[stage - 1]
-
+                # Build comprehensive regeneration prompt with ALL information
+                all_previous_code = "\n\n".join([
+                    f"### Stage {i+1} Code ###\n{code}" 
+                    for i, code in enumerate(stage_code_blocks)
+                ])
+                
+                # Get all original prompts for context
+                all_original_prompts = "\n\n".join([
+                    f"### Original Stage {i+1} Prompt ###\n{prompt}"
+                    for i, prompt in enumerate(stage_prompts)
+                ])
+                
+                # Build the comprehensive regeneration prompt with UNLIMITED context
                 regen_prompt = (
-                    f"### Error Traceback and Message\n{user_feedback}\n\n"
-                    f"### Previously Generated Code (stage {stage})\n{original_code}\n\n"
-                    f"### Original Prompt for This Stage\n{original_prompt}\n\n"
-                    f"### Instruction\nPlease provide corrected code for stage {stage}, enclosed in triple backticks."
+                    f"### COMPLETE DATASET ANALYSIS JSON ###\n"
+                    f"{dataset_json_content}\n\n"
+                    
+                    f"### COMPLETE EDA REPORT ###\n"
+                    f"{analysis_report}\n\n"
+                    
+                    f"### COMPLETE ERROR TRACEBACK AND MESSAGE ###\n"
+                    f"{user_feedback}\n\n"
+                    
+                    f"### ALL ORIGINAL PROMPTS FOR CONTEXT ###\n"
+                    f"{all_original_prompts}\n\n"
+                    
+                    f"### ALL PREVIOUSLY GENERATED CODE ###\n"
+                    f"{all_previous_code}\n\n"
+                    
+                    f"### CURRENT TASK ###\n"
+                    f"You are regenerating stage {stage} code. Analyze the complete error traceback above, "
+                    f"review all the context (dataset analysis, EDA report, original prompts, and all previously generated code), "
+                    f"and provide a corrected version of stage {stage} code that fixes the reported errors.\n\n"
+                    
+                    f"Requirements:\n"
+                    f"- Fix ALL issues mentioned in the error traceback\n"
+                    f"- Ensure compatibility with all other stages\n"
+                    f"- Use the complete dataset analysis JSON for accurate feature engineering\n"
+                    f"- Maintain the same overall structure and approach\n"
+                    f"- Include proper error handling\n"
+                    f"- Return ONLY the corrected Python code for stage {stage} enclosed in triple backticks."
                 )
 
                 messages = [
-                    {"role": "system", "content": "You are a senior ML engineer."},
+                    {"role": "system", "content": "You are a senior ML engineer with access to complete project context. Use all available information to provide the best solution."},
                     {"role": "user", "content": regen_prompt},
                 ]
 
                 try:
-                    response_content = openai_client.chat_completion(messages, temperature=0)
+                    response_content = gemini_client.chat_completion(messages, temperature=0)
                 except Exception as exc:
-                    logger.error("OpenAI request failed during regeneration: %s", exc)
+                    logger.error("Gemini request failed during regeneration: %s", exc)
                     raise SystemExit(1)
 
                 new_code_block = codegen.validate_and_extract(response_content)
@@ -221,6 +265,10 @@ def main() -> None:
                 "Regeneration completed. Updated outputs in %s",
                 output_root / f"{project.name}.py",
             )
+
+    # Print token usage summary at the end
+    if 'gemini_client' in locals():
+        gemini_client.print_token_summary()
 
 
 if __name__ == "__main__":
