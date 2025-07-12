@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import re
+import json
 from typing import List
 
 from src.utils.env_config import load_config
@@ -27,6 +29,10 @@ def _parse_args() -> argparse.Namespace:
     accel_group.add_argument("-p100", action="store_true", help="Use Nvidia P100 GPU on Kaggle")
 
     parser.add_argument("--log-level", type=str, default="INFO", help="Logging level (DEBUG, INFO, WARNING, ERROR)")
+    # Custom user prompt for the LLM
+    parser.add_argument(
+        "-m", "--message", type=str, default="", help="Additional user prompt passed to the AI data analyzer"
+    )
     # Gemini thinking mode
     parser.add_argument(
         "-thinking", "--thinking", type=str, default="off",
@@ -107,7 +113,7 @@ def main() -> None:
         # Build dataset metadata JSON once – reuse for error regeneration prompts
         dataset_json_content = ""
         try:
-            dataset_json_content = analyzer.generate_dataset_json(project, openai_client=gemini_client).read_text(encoding="utf-8")
+            dataset_json_content = analyzer.generate_dataset_json(project, openai_client=gemini_client, message=args.message).read_text(encoding="utf-8")
         except Exception as exc:
             logger.error("Failed to create dataset JSON for project %s: %s", project.name, exc)
 
@@ -209,6 +215,23 @@ def main() -> None:
 
             if user_feedback == "-c":
                 logger.info("User confirmed success. Exiting.")
+                # --------------------------------------------------
+                # Save Gemini token usage statistics to JSON
+                # --------------------------------------------------
+                try:
+                    usage = gemini_client.get_token_usage()
+                    # Simple cost estimate assuming $0.0000003 per prompt token and $0.0000025 per completion token
+                    usage["estimated_cost_usd"] = round(
+                        (usage["total_prompt_tokens"] * 0.3 + usage["total_completion_tokens"] * 2.5) / 1_000_000,
+                        6,
+                    )
+
+                    token_usage_path = output_root / "token_usage.json"
+                    with open(token_usage_path, "w", encoding="utf-8") as f:
+                        json.dump(usage, f, indent=2)
+                    logger.info("Token usage summary written to %s", token_usage_path)
+                except Exception as exc:
+                    logger.warning("Failed to write token usage JSON: %s", exc)
                 break
 
             logger.info("User reported issue – attempting regeneration with error context…")
@@ -217,47 +240,65 @@ def main() -> None:
             stage_paths_regen: List[Path] = []
 
             for stage in (1, 2, 3):
-                # Build comprehensive regeneration prompt with ALL information
-                all_previous_code = "\n\n".join([
-                    f"### Stage {i+1} Code ###\n{code}" 
-                    for i, code in enumerate(stage_code_blocks)
-                ])
-                
-                # Get all original prompts for context
-                all_original_prompts = "\n\n".join([
-                    f"### Original Stage {i+1} Prompt ###\n{prompt}"
-                    for i, prompt in enumerate(stage_prompts)
-                ])
-                
-                # Build the comprehensive regeneration prompt with UNLIMITED context
+                # Build comprehensive regeneration prompt (simplified)
+                def _extract_snippet(code_str: str, err_line: int, ctx: int = 15) -> str:
+                    """Return snippet of code ±ctx lines around err_line (1-indexed)."""
+                    lines = code_str.splitlines()
+                    start = max(0, err_line - ctx - 1)
+                    end = min(len(lines), err_line + ctx)
+                    return "\n".join(lines[start:end])
+
+                snippets: list[str] = []
+                for i, code in enumerate(stage_code_blocks):
+                    filename = f"stage{i+1}.py"
+                    # Try to locate line number from traceback for this file
+                    match = re.search(rf"File \".*{re.escape(filename)}\", line (\d+)", user_feedback)
+                    if match:
+                        line_no = int(match.group(1))
+                        snippet = _extract_snippet(code, line_no)
+                    else:
+                        # Try generic 'line N' capture (last occurrence)
+                        generic_tuples = re.findall(r"File \"([^\"]+)\", line (\d+)", user_feedback)
+                        chosen_line = None
+                        # Iterate from bottom to top (nearest to error)
+                        for file_path, ln in reversed(generic_tuples):
+                            # Skip library/vendor frames to focus on user code
+                            if file_path.startswith("/usr") or "site-packages" in file_path:
+                                continue
+                            ln_int = int(ln)
+                            if ln_int <= len(code.splitlines()):
+                                chosen_line = ln_int
+                                break
+
+                        # Fallback: use any line number that fits
+                        if chosen_line is None and generic_tuples:
+                            for _fp, ln in reversed(generic_tuples):
+                                ln_int = int(ln)
+                                if ln_int <= len(code.splitlines()):
+                                    chosen_line = ln_int
+                                    break
+
+                        if chosen_line:
+                            snippet = _extract_snippet(code, chosen_line)
+                        else:
+                            snippet = code
+                    snippets.append(f"### Stage {i+1} Code Snippet ###\n{snippet}")
+
+                all_previous_code = "\n\n".join(snippets)
+
+                # Build simplified regeneration prompt
                 regen_prompt = (
-                    f"### COMPLETE DATASET ANALYSIS JSON ###\n"
-                    f"{dataset_json_content}\n\n"
-                    
-                    f"### COMPLETE EDA REPORT ###\n"
-                    f"{analysis_report}\n\n"
-                    
-                    f"### COMPLETE ERROR TRACEBACK AND MESSAGE ###\n"
-                    f"{user_feedback}\n\n"
-                    
-                    f"### ALL ORIGINAL PROMPTS FOR CONTEXT ###\n"
-                    f"{all_original_prompts}\n\n"
-                    
-                    f"### ALL PREVIOUSLY GENERATED CODE ###\n"
-                    f"{all_previous_code}\n\n"
-                    
-                    f"### CURRENT TASK ###\n"
-                    f"You are regenerating stage {stage} code. Analyze the complete error traceback above, "
-                    f"review all the context (dataset analysis, EDA report, original prompts, and all previously generated code), "
-                    f"and provide a corrected version of stage {stage} code that fixes the reported errors.\n\n"
-                    
-                    f"Requirements:\n"
-                    f"- Fix ALL issues mentioned in the error traceback\n"
-                    f"- Ensure compatibility with all other stages\n"
-                    f"- Use the complete dataset analysis JSON for accurate feature engineering\n"
-                    f"- Maintain the same overall structure and approach\n"
-                    f"- Include proper error handling\n"
-                    f"- Return ONLY the corrected Python code for stage {stage} enclosed in triple backticks."
+                    f"### DATASET METADATA JSON ###\n{dataset_json_content}\n\n"
+                    f"### ERROR TRACEBACK ###\n{user_feedback}\n\n"
+                    f"### EXISTING CODE ###\n{all_previous_code}\n\n"
+                    f"You are tasked with fixing **Stage {stage}** based on the traceback.\n"
+                    f"Follow these common repair patterns:\n"
+                    f"- *ImportError*: add or correct `import` statements.\n"
+                    f"- *NameError*: ensure all variables and functions are defined/renamed consistently.\n"
+                    f"- *FileNotFoundError*: adjust file paths using `Path(base_path)/...`.\n"
+                    f"- *TypeError / ValueError*: validate and convert data types or reshape arrays as needed.\n"
+                    f"- *AttributeError*: confirm objects support the attribute/method, or convert to correct type.\n\n"
+                    f"Output only the fixed Python code for stage {stage} inside triple backticks."
                 )
 
                 messages = [

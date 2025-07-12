@@ -53,19 +53,54 @@ class CodeGenerator:
             # Attempt to strip triple backtick fenced blocks
             if "```" in raw_response:
                 segments = raw_response.split("```")
-                # The code segment is typically after the first fence (index 1)
-                # but sometimes model responds with language spec; handle both
+
+                # Strategy:
+                # 1) Prefer segments explicitly tagged as python
+                # 2) Otherwise try each segment until one parses without SyntaxError
+                chosen: Optional[str] = None
+
                 for seg in segments[1:]:
-                    if seg.strip() == "":
+                    if not seg.strip():
                         continue
-                    # Remove possible language tag (e.g., python) on first line
+
+                    # Separate optional language tag from content
                     first_nl = seg.find("\n")
                     if first_nl != -1:
+                        lang_tag = seg[:first_nl].strip().lower()
                         tentative_code = seg[first_nl + 1 :]
                     else:
+                        lang_tag = ""
                         tentative_code = seg
-                    code_block = tentative_code
-                    break
+
+                    # Prefer explicit python tag
+                    if lang_tag.startswith("python"):
+                        chosen = tentative_code
+                        break
+
+                # If no explicit python tag chosen, fall back to first segment that parses
+                if chosen is None:
+                    for seg in segments[1:]:
+                        if not seg.strip():
+                            continue
+                        first_nl = seg.find("\n")
+                        tentative_code = seg[first_nl + 1 :] if first_nl != -1 else seg
+                        try:
+                            ast.parse(tentative_code)
+                            chosen = tentative_code
+                            break
+                        except SyntaxError:
+                            continue
+
+                # Final fallback: first non-empty segment
+                if chosen is None:
+                    for seg in segments[1:]:
+                        if seg.strip():
+                            first_nl = seg.find("\n")
+                            tentative_code = seg[first_nl + 1 :] if first_nl != -1 else seg
+                            chosen = tentative_code
+                            break
+
+                code_block = chosen or ""
             else:
                 code_block = raw_response
         self.validate(code_block)

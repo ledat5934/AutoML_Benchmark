@@ -25,6 +25,9 @@ class DataAnalyzer:
 
     SUPPORTED_DATA_EXTS: set[str] = {".csv", ".parquet"}
     SUPPORTED_IMG_EXTS: set[str] = {".jpg", ".jpeg", ".png", ".bmp", ".gif"}
+    # Additional modalities
+    SUPPORTED_TEXT_EXTS: set[str] = {".txt", ".json", ".xml", ".html", ".md"}
+    SUPPORTED_AUDIO_EXTS: set[str] = {".wav", ".mp3", ".flac", ".ogg", ".aac"}
 
     def analyze(self, root: Path) -> List[ProjectInfo]:
         """Return list of ProjectInfo for every project description found under *root*."""
@@ -89,19 +92,50 @@ class DataAnalyzer:
 
     def _collect_data_files(self, project_dir: Path, desc_path: Path) -> Dict[str, List[Path]]:
         files: Dict[str, List[Path]] = {}
+        # ------------------------------------------------------------------
+        # 1) Tabular data (.csv / .parquet)
+        # ------------------------------------------------------------------
         for ext in self.SUPPORTED_DATA_EXTS:
             for p in project_dir.rglob(f"*{ext}"):
-                # skip the description file
                 if p == desc_path:
                     continue
                 key = p.stem
                 files.setdefault(key, []).append(p)
+
+        # ------------------------------------------------------------------
+        # 2) Generic data folders (images, text, audio, etc.)
+        # ------------------------------------------------------------------
+        def _is_supported_file(path: Path) -> bool:
+            ext = path.suffix.lower()
+            return (
+                ext in self.SUPPORTED_IMG_EXTS
+                or ext in self.SUPPORTED_TEXT_EXTS
+                or ext in self.SUPPORTED_AUDIO_EXTS
+            )
+
+        for d in project_dir.rglob("*"):
+            if not d.is_dir():
+                continue
+            if d == project_dir:
+                continue  # skip root dir itself
+            if d.name.startswith("."):
+                continue  # ignore hidden/system dirs
+
+            # Check if directory contains at least one supported file
+            if any(_is_supported_file(f) for f in d.rglob("*")):
+                files.setdefault(d.name, []).append(d)
+
         return files
 
     # ------------------------------------------------------------------
     # Dataset JSON generation using ydata_profiling
     # ------------------------------------------------------------------
-    def generate_dataset_json(self, project: ProjectInfo, openai_client: Optional["GeminiClient"] = None) -> Path:
+    def generate_dataset_json(
+        self,
+        project: ProjectInfo,
+        openai_client: Optional["GeminiClient"] = None,
+        message: str | None = None,
+    ) -> Path:
         """Create a `<dataset>.json` file under *project.project_dir* containing
         1. dataset_info – file paths and inferred roles
         2. profiling_summary – overview produced by *ydata_profiling*
@@ -118,22 +152,43 @@ class DataAnalyzer:
         # --------------------------------------------------------------
         # 1) DATASET INFO
         # --------------------------------------------------------------
-        # Convert to relative path from current working directory
-        try:
-            relative_base_path = project.project_dir.relative_to(_Path.cwd()).as_posix()
-        except ValueError:
-            # If project_dir is not relative to cwd, use the project name with relative structure
-            relative_base_path = f"./{project.name}"
+        # Convert to path string that works both locally and on Kaggle
+        kaggle_input_prefix = "/kaggle/input"
+        project_dir_posix = project.project_dir.as_posix()
+
+        if project_dir_posix.startswith(kaggle_input_prefix):
+            # Running inside Kaggle or pointing to Kaggle dataset – keep absolute path so that
+            # subsequent code can read files directly without additional joins.
+            base_path_str = project_dir_posix
+        else:
+            # Try to build a relative path to make the JSON portable across OSes.
+            try:
+                base_path_str = project.project_dir.relative_to(_Path.cwd()).as_posix()
+            except ValueError:
+                # Fallback to absolute posix path (Windows -> C:/...)
+                base_path_str = project_dir_posix
 
         dataset_info: Dict[str, object] = {
             "name": project.name,
-            "base_path": relative_base_path,
+            "base_path": base_path_str,
             "description_file": project.desc_path.relative_to(project.project_dir).as_posix(),
             "files": []
         }
 
         def _infer_role(path: _Path) -> str:
-            """Infer role from filename patterns."""
+            """Infer role from filename or directory patterns."""
+            name_lower = path.name.lower()
+            # Special-case image folders so we preserve the richer role names
+            if path.is_dir():
+                if "train" in name_lower:
+                    return "train_images"
+                if "test" in name_lower:
+                    return "test_images"
+                if "valid" in name_lower or "val" in name_lower:
+                    return "validation_images"
+                return "image_folder"
+
+            # File-based heuristics (fallbacks)
             stem_lower = path.stem.lower()
             if "train" in stem_lower:
                 return "train"
@@ -147,14 +202,32 @@ class DataAnalyzer:
                 return "data"
 
         def _infer_type(path: _Path) -> str:
-            """Infer data type from file extension."""
+            """Infer data type from path (file or directory)."""
+            if path.is_dir():
+                # Peek at one file inside to guess modality
+                try:
+                    sample_file = next(f for f in path.rglob("*") if f.is_file())
+                    ext = sample_file.suffix.lower()
+                    if ext in self.SUPPORTED_IMG_EXTS:
+                        return "image_folder"
+                    if ext in self.SUPPORTED_AUDIO_EXTS:
+                        return "audio_folder"
+                    if ext in self.SUPPORTED_TEXT_EXTS:
+                        return "text_folder"
+                except StopIteration:
+                    pass  # empty directory – unknown
+                return "folder"
+
             ext = path.suffix.lower()
             if ext in {".csv", ".parquet"}:
                 return "tabular"
-            elif ext in self.SUPPORTED_IMG_EXTS:
+            if ext in self.SUPPORTED_IMG_EXTS:
                 return "image"
-            else:
-                return "other"
+            if ext in self.SUPPORTED_AUDIO_EXTS:
+                return "audio"
+            if ext in self.SUPPORTED_TEXT_EXTS:
+                return "text"
+            return "other"
 
         # Collect all candidate files
         candidate_paths = [p for lst in project.data_files.values() for p in lst]
@@ -280,6 +353,7 @@ class DataAnalyzer:
                 description=description_text,
                 client=openai_client,
                 profiling_summary=profiling_summary,
+                message=message,
             )
         else:
             logger.warning("No OpenAI client provided. Creating a fallback task definition.")
@@ -306,6 +380,7 @@ class DataAnalyzer:
         description: str,
         client: "GeminiClient",
         profiling_summary: Dict[str, object],
+        message: str | None = None,
     ) -> Dict[str, object]:
         """Use an LLM to parse the description.txt and profiling summary into a structured task definition."""
 
@@ -327,9 +402,14 @@ class DataAnalyzer:
         }
         profiling_context = json.dumps(context_fields, indent=2)
 
+        # --------------------------------------------------------------
+        # Incorporate optional user message into the prompt
+        # --------------------------------------------------------------
+        user_message_section = f"\n**User Additional Instructions:**\n{message}\n" if message else ""
+
         prompt = f"""You are an expert machine learning engineer analyzing a new dataset.
 Your goal is to create a structured JSON object that defines the machine learning task.
-You will be given the dataset description and a JSON summary from a profiling tool.
+You will be given the dataset description and a JSON summary from a profiling tool.{user_message_section}
 
 Analyze the provided text and JSON to perform the following:
 1.  **Summarize Description**: Read the 'Dataset Description' and create a concise summary.
