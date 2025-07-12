@@ -113,7 +113,11 @@ class GeminiClient:
         messages: List[Dict[str, str]],
         temperature: float = 0.0,
         max_tokens: Optional[int] = None,
-        use_thinking: bool = False,
+        # use_thinking semantics:
+        #   • False (default) ➜ thinking disabled (budget=0)
+        #   • True           ➜ dynamic thinking (budget=-1)
+        #   • int  > 0      ➜ fixed thinking budget in tokens
+        use_thinking: bool | int = False,
         clean_response: bool = True,
         **kwargs: Any,
     ) -> str:
@@ -130,7 +134,24 @@ class GeminiClient:
         gen_config_params = {"temperature": temperature}
         if max_tokens is not None:
             gen_config_params["max_output_tokens"] = max_tokens
-        
+
+        # ------------------------------------------------------------------
+        # Thinking configuration – disable by default for cost savings
+        # ------------------------------------------------------------------
+        thinking_conf = None
+        try:
+            if use_thinking is False:
+                # Explicitly disable model thinking to avoid extra token costs
+                thinking_conf = types.ThinkingConfig(thinking_budget=0)
+            elif use_thinking is True:
+                # Dynamic thinking (-1) lets the model decide budget
+                thinking_conf = types.ThinkingConfig(thinking_budget=-1)
+            elif isinstance(use_thinking, int):
+                # Caller provided an explicit budget (>=0)
+                thinking_conf = types.ThinkingConfig(thinking_budget=use_thinking)
+        except Exception as exc:
+            logger.warning("Could not create ThinkingConfig: %s", exc)
+
         # Define safety settings dictionary before using it
         safety_settings = {
             HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
@@ -146,6 +167,7 @@ class GeminiClient:
                 types.SafetySetting(category=key, threshold=value)
                 for key, value in safety_settings.items()
             ],
+            thinking_config=thinking_conf,
             **kwargs
         )
 
@@ -213,7 +235,7 @@ class GeminiClient:
         print(f"Total Tokens: {usage['total_tokens']:,}")
         
         if usage['total_tokens'] > 0:
-            estimated_cost = (usage['total_prompt_tokens'] * 0.00125 + usage['total_completion_tokens'] * 0.00375) / 1000000
+            estimated_cost = (usage['total_prompt_tokens'] * 0.3 + usage['total_completion_tokens'] * 2.5) / 1000000
             print(f"💰 Estimated Cost: ~${estimated_cost:.6f}")
         print("="*50)
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Dict, List, Optional
+import json  # Added to parse dataset JSON
 
 from src.data_analyzer import ProjectInfo
 from src.utils.logger import get_logger
@@ -49,6 +50,22 @@ class PromptBuilder:
         """
 
         # ------------------------------------------------------------------
+        # Extract base_path from dataset_json for cross-platform path handling
+        # ------------------------------------------------------------------
+        # Ensure we always have a _base_path attribute to prevent AttributeError
+        self._base_path = getattr(self, "_base_path", ".")  # default fallback
+
+        if dataset_json:
+            try:
+                # The dataset_json string may contain extra whitespace/newlines – load safely
+                dataset_meta = json.loads(dataset_json)
+                self._base_path = dataset_meta.get("dataset_info", {}).get("base_path", ".") or "."
+            except json.JSONDecodeError:
+                # If JSON parsing fails, keep the previous (or default) base path
+                logger.warning("Failed to parse dataset_json – falling back to '.' for base_path")
+
+        
+        # ------------------------------------------------------------------
         # Build the USER prompt piece-by-piece
         # ------------------------------------------------------------------
         prompt_sections: list[str] = []
@@ -88,8 +105,24 @@ class PromptBuilder:
     def _stage_instructions(self, stage: int) -> str:
         """Return human-readable instructions for the given stage."""
 
+        # NOTE: Removed unused imports and constants to keep the prompt builder lean
+
+        # ------------------------------------------------------------------
+        # Mẫu “file-paths constants” mới cho mọi script
+        # ------------------------------------------------------------------
+        base = self._base_path
+        pathlib_instruction = (
+            "IMPORTANT: All file paths must use pathlib **and** work no matter what the current working "
+            "directory is. Determine the project root dynamically: "
+            "`ROOT_DIR = Path(__file__).resolve().parent.parent` (two levels up from the generated script, "
+            "which is `<project>/AutoML_Benchmark`).  Then build dataset paths relative to that root, e.g.\n"
+            f"`BASE_PATH = (ROOT_DIR / '{base}').resolve()`  – fall back to `Path('{base}').resolve()` if "
+            "the first option does not exist. Always print the resolved BASE_PATH so users can verify."
+        )
+
         if stage == 1:
             return (
+                f"{pathlib_instruction}\n\n"
                 "Declare **file-path constants** at the top of the script so they can be overridden easily when running outside Kaggle. Defaults should mirror the standard Kaggle notebook directory layout _but allow automatic fallback_: "
                 "Stage 1 focuses on **data loading, cleaning, prepprocessing**. "
                 "Write Python compatible code that: (1) loads the dataset (tabular, CV or NLP) "
@@ -102,15 +135,17 @@ class PromptBuilder:
                 • For image paths, implement a lightweight loader - either a PyTorch `Dataset` **or** a TensorFlow `tf.data` pipeline that loads, resizes (e.g. 224×224), and normalizes images; optionally extract embeddings via a pre-trained backbone (e.g. EfficientNet-B0) so they can be merged later.
                 • Scale numerical features with `StandardScaler` (store the scaler for later reuse).
                 • Handle any other preprocessing steps as needed (feature selection, feature engineering, etc.).
+                • These are just examples; you can choose any preprocessing steps that you think is appropriate.
                 """
                 "Keep the code modular and wrap everything "
                 "inside a `main()` function.  Enclose the entire Python script in triple backticks."
             )
         elif stage == 2:
             return (
+                f"{pathlib_instruction}\n\n"
                 """
                  Declare **file-path constants** at the top of the script so they can be overridden easily when running outside Kaggle. Defaults should mirror the standard Kaggle notebook directory layout _but allow automatic fallback_: 
-                1 Perform an **80 / 20 stratified split** into training and validation sets using `train_test_split(random_state=42, stratify=y), using variables name from the preprocessing step if available`.
+                1. Perform an **80 / 20 stratified split** into training and validation sets using `train_test_split(random_state=42, stratify=y), using variables name from the preprocessing step if available`.
                 2. Build a **model automatically suited to the task type**. Examples:
                     • **Tabular**: Gradient Boosting (`LightGBM`, `CatBoost`, `XGBoost`), `RandomForest`.
                     • **Image**: Fine-tune a pre-trained CNN (e.g. EfficientNet, ResNet, ConvNeXt) or use a Vision Transformer – you may implement in **PyTorch** *or* **TensorFlow/Keras**.
@@ -119,15 +154,17 @@ class PromptBuilder:
                     • You may choose deep learning frameworks (PyTorch, TensorFlow/Keras) when beneficial.
                     • These are just examples; you can choose any model that you think is appropriate.
                 3. Fit the model on the training split. Use early stopping on the validation split (100 rounds).
-                4. Evaluate and **print** multiple metrics:
-                    • Classification → Accuracy, F1, LogLoss.
-                    • Regression → RMSE, MAE, R², Accuracy, F1, LogLoss.
+                4. Evaluate and **print** multiple metrics **and also persist them to a JSON file**:
+                    • Classification → Accuracy, F1, LogLoss, ROC_AUC.
+                    • Regression → RMSE, MAE, R², Accuracy, F1, LogLoss, ROC_AUC.
+                    • Save a dictionary of metrics per target (and overall) to `METRICS_PATH = "./outputs/metrics.json"` (override-able). Use `json.dump(metrics_dict, open(..., "w"), indent=2)`.
                 5. At the top of the script declare `MODEL_PATH = "./models/<dataset_name>_model.pkl"` (override-able); persist the trained model there using `joblib.dump`.
                 6. Return the trained model instance as `trained_model`.
                """
             )
         elif stage == 3:
             return (
+                f"{pathlib_instruction}\n\n"
                 '''
                 Declare **file-path constants** at the top of the script so they can be overridden easily when running outside Kaggle. Defaults should mirror the standard Kaggle notebook directory layout _but allow automatic fallback_: 
                 1. Ensure `trained_model` is available. If it is `None`, load the model from `models/model.pkl` using `joblib.load`.

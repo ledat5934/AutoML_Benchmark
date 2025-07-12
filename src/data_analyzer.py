@@ -120,7 +120,7 @@ class DataAnalyzer:
         # --------------------------------------------------------------
         # Convert to relative path from current working directory
         try:
-            relative_base_path = str(project.project_dir.relative_to(_Path.cwd())).replace('\\', '/')
+            relative_base_path = project.project_dir.relative_to(_Path.cwd()).as_posix()
         except ValueError:
             # If project_dir is not relative to cwd, use the project name with relative structure
             relative_base_path = f"./{project.name}"
@@ -128,7 +128,7 @@ class DataAnalyzer:
         dataset_info: Dict[str, object] = {
             "name": project.name,
             "base_path": relative_base_path,
-            "description_file": str(project.desc_path.relative_to(project.project_dir)),
+            "description_file": project.desc_path.relative_to(project.project_dir).as_posix(),
             "files": []
         }
 
@@ -167,7 +167,7 @@ class DataAnalyzer:
             seen.add(p)
             files_meta.append(
                 {
-                    "path": str(p.relative_to(project.project_dir)),
+                    "path": p.relative_to(project.project_dir).as_posix(),
                     "role": _infer_role(p),
                     "type": _infer_type(p),
                 }
@@ -268,86 +268,25 @@ class DataAnalyzer:
             profiling_summary = {"warning": "No profiling available – training file not found."}
 
         # --------------------------------------------------------------
-        # 3) TASK DEFINITION via LLM
+        # 3) TASK DEFINITION from description.txt, powered by LLM
         # --------------------------------------------------------------
         task_definition: Dict[str, object] = {}
-        try:
-            desc_text = project.desc_path.read_text(encoding="utf-8")
-        except Exception as exc:
-            logger.warning("Could not read description.txt: %s", exc)
-            desc_text = ""
+        description_text = project.desc_path.read_text(encoding="utf-8")
 
-        if openai_client is not None and desc_text:
-            from textwrap import dedent
-
-            # Create a more focused, shorter prompt to reduce API issues
-            prompt = dedent(
-                f"""
-                Analyze this dataset and return ONLY a JSON object, no other text:
-
-                Dataset: {project.name}
-                Description: {desc_text[:500]}{"..." if len(desc_text) > 500 else ""}
-                Columns: {', '.join(profile_df.columns[:10]) if profile_df is not None else 'N/A'}{"..." if profile_df is not None and len(profile_df.columns) > 10 else ""}
-                
-                Return this JSON structure:
-                {{
-                  "problem_type": "Classification|Regression|Other",
-                  "objective": "Brief prediction goal",
-                  "target_column": "{{'name': 'target_col', 'description': 'brief desc'}}",
-                  "note": "Automated analysis"
-                }}
-                """
+        if openai_client:
+            logger.info("Extracting task definition from description.txt using LLM...")
+            task_definition = self._extract_task_with_llm(
+                project_name=project.name,
+                description=description_text,
+                client=openai_client,
+                profiling_summary=profiling_summary,
             )
-            try:
-                logger.info("Calling Gemini API for task definition...")
-                logger.debug("Prompt length: %d characters", len(prompt))
-                
-                completion = openai_client.chat_completion([
-                    {"role": "system", "content": "You are an expert data scientist."},
-                    {"role": "user", "content": prompt},
-                ], temperature=0)
-
-                logger.info("Gemini API call completed")
-                logger.debug("Raw Gemini response length: %d", len(completion) if completion else 0)
-                
-                # Check if response is empty or invalid
-                if not completion or completion.strip() == "":
-                    logger.warning("Gemini returned empty response for task definition")
-                    logger.warning("This might be due to: API key issues, network problems, or prompt too large")
-                    task_definition = {
-                        "warning": "Gemini returned empty response",
-                        "possible_causes": [
-                            "Invalid GEMINI_API_KEY in .env file",
-                            "Network connectivity issues", 
-                            "Gemini API service unavailable",
-                            "Prompt may be too large or contain unsupported content"
-                        ],
-                        "suggestion": "Check your GEMINI_API_KEY and network connection"
-                    }
-                else:
-                    logger.debug("Raw Gemini response preview: %s", completion[:200])
-                    try:
-                        task_definition = json.loads(completion)
-                        logger.info("Successfully parsed task definition from Gemini")
-                    except json.JSONDecodeError as json_err:
-                        logger.warning("Gemini response is not valid JSON: %s", json_err)
-                        logger.warning("Raw Gemini response: %s", completion[:500])  # Show first 500 chars for debugging
-                        task_definition = {
-                            "warning": "Gemini response could not be parsed as JSON",
-                            "error_details": str(json_err),
-                            "raw_response_preview": completion[:200] if completion else "No response",
-                            "suggestion": "Response may contain markdown formatting or extra text. Check raw response above."
-                        }
-            except Exception as exc:  # broad catch – API or JSON errors
-                logger.error("Gemini API call failed while composing task definition: %s", exc)
-                logger.info("Creating fallback task definition based on available data...")
-                task_definition = self._create_fallback_task_definition(project, profile_df, desc_text)
         else:
-            logger.info("Gemini client not provided, creating basic task definition...")
-            task_definition = self._create_fallback_task_definition(project, profile_df, desc_text)
+            logger.warning("No OpenAI client provided. Creating a fallback task definition.")
+            task_definition = self._create_fallback_task_definition(project, profile_df, description_text)
 
         # --------------------------------------------------------------
-        # Combine all parts and write JSON file
+        # 4) ASSEMBLE and WRITE FINAL JSON
         # --------------------------------------------------------------
         dataset_dict = {
             "dataset_info": dataset_info,
@@ -360,6 +299,88 @@ class DataAnalyzer:
             json.dump(dataset_dict, f, indent=2, ensure_ascii=False)
         logger.info("Dataset metadata written to %s", out_path)
         return out_path
+
+    def _extract_task_with_llm(
+        self,
+        project_name: str,
+        description: str,
+        client: "GeminiClient",
+        profiling_summary: Dict[str, object],
+    ) -> Dict[str, object]:
+        """Use an LLM to parse the description.txt and profiling summary into a structured task definition."""
+
+        # Select a few key fields from profiling to give the LLM context without overloading it
+        context_fields = {
+            "table": profiling_summary.get("table"),
+            "variables": {
+                k: {
+                    "type": v.get("type"),
+                    "description": v.get("description"),
+                    "n_missing": v.get("n_missing"),
+                    "p_missing": v.get("p_missing"),
+                    "n_unique": v.get("n_unique"),
+                    "is_highly_correlated": v.get("is_highly_correlated"),
+                }
+                for k, v in profiling_summary.get("variables", {}).items()
+            },
+            "analysis": profiling_summary.get("analysis"),
+        }
+        profiling_context = json.dumps(context_fields, indent=2)
+
+        prompt = f"""You are an expert machine learning engineer analyzing a new dataset.
+Your goal is to create a structured JSON object that defines the machine learning task.
+You will be given the dataset description and a JSON summary from a profiling tool.
+
+Analyze the provided text and JSON to perform the following:
+1.  **Summarize Description**: Read the 'Dataset Description' and create a concise summary.
+2.  **Identify Special Notes**: Carefully review the description for any critical details that would affect modeling, such as:
+    -   It is a multi-output or multi-label classification task.
+    -   The dataset is imbalanced.
+    -   Specific evaluation metrics are required (e.g., "must use AUC ROC").
+    -   The data has unique properties (e.g., time-series, hierarchical).
+    If you find any such details, add them to a 'note' field. If not, omit the note. The note should be a brief, impactful statement for the developer. For example, for the steel defect problem which is multi-output, a good note would be: "This is a multi-output classification problem; all outputs must be predicted correctly for a successful prediction."
+3.  **Determine Task Type**: Based on all available information, classify the task. Common types include:
+    -   `binary_classification`
+    -   `multi_class_classification`
+    -   `multi_label_classification`
+    -   `regression`
+    -   `clustering`
+    -   `time_series_forecasting`
+4.  **Identify Target Column(s)**: Find the name of the target column(s) or dependent variable(s). It might be explicitly named or implied. List them.
+5.  **Identify Evaluation Metric**: Determine the primary metric for evaluating model performance. If not specified, suggest a standard metric for the task type (e.g., 'accuracy' for classification, 'rmse' for regression).
+
+**Input:**
+**Project Name:** {project_name}
+**Dataset Description:**
+---
+{description}
+---
+**Profiling Summary:**
+---
+{profiling_context}
+---
+
+**Output Format:**
+Return ONLY a valid JSON object with the following structure. Do NOT include any explanations or markdown formatting.
+
+{{
+  "description_summary": "<Your concise summary of the dataset description>",
+  "note": "<Your critical note about the dataset, if any. Omit this field if there's nothing special.>",
+  "task_type": "<The determined machine learning task type>",
+  "target_columns": ["<list>", "<of>", "<target>", "<column>", "<names>"],
+  "evaluation_metric": "<The primary evaluation metric>"
+}}
+"""
+        try:
+            messages = [{"role": "user", "content": prompt}]
+            response_str = client.chat_completion(messages=messages, temperature=0.0, clean_response=True)
+            return json.loads(response_str)
+        except json.JSONDecodeError as e:
+            logger.error("Failed to decode JSON from LLM response: %s\nResponse: %s", e, response_str)
+            return {"error": "Failed to parse LLM response as JSON", "raw_response": response_str}
+        except Exception as e:
+            logger.error("An unexpected error occurred during LLM task extraction: %s", e)
+            return {"error": f"An unexpected error occurred: {e}"}
 
     def _create_basic_profile_fallback(self, df: "pd.DataFrame") -> Dict[str, object]:
         """Create a basic profiling summary using pandas when ydata_profiling fails."""

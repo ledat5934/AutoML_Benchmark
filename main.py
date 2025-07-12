@@ -27,12 +27,35 @@ def _parse_args() -> argparse.Namespace:
     accel_group.add_argument("-p100", action="store_true", help="Use Nvidia P100 GPU on Kaggle")
 
     parser.add_argument("--log-level", type=str, default="INFO", help="Logging level (DEBUG, INFO, WARNING, ERROR)")
+    # Gemini thinking mode
+    parser.add_argument(
+        "-thinking", "--thinking", type=str, default="off",
+        help="Gemini thinking mode: off | on | <int>. Example: -thinking=on or --thinking 256"
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = _parse_args()
     setup_logging(level=args.log_level)
+
+    # ------------------------------------------------------------------
+    # Parse thinking argument (off | on | integer budget)
+    # ------------------------------------------------------------------
+    thinking_arg = args.thinking.strip() if isinstance(args.thinking, str) else "off"
+    if thinking_arg.lower() in {"off", "false", "no"}:
+        use_thinking: bool | int = False
+    elif thinking_arg.lower() in {"on", "true", "yes"}:
+        use_thinking = True
+    else:
+        try:
+            use_thinking = int(thinking_arg)
+            if use_thinking < 0:
+                raise ValueError
+        except ValueError:
+            raise SystemExit(f"Invalid --thinking value: {thinking_arg}. Use off, on, or non-negative integer.")
+
+    get_logger(__name__).info("Gemini thinking mode set to: %s", use_thinking)
 
     # Determine requested accelerator
     accelerator = None
@@ -82,11 +105,9 @@ def main() -> None:
         gemini_client = GeminiClient(config)
         # NEW: generate <dataset>.json metadata file
         # Build dataset metadata JSON once – reuse for error regeneration prompts
-        dataset_json_path = None
         dataset_json_content = ""
         try:
-            dataset_json_path = analyzer.generate_dataset_json(project, openai_client=gemini_client)
-            dataset_json_content = dataset_json_path.read_text(encoding="utf-8")
+            dataset_json_content = analyzer.generate_dataset_json(project, openai_client=gemini_client).read_text(encoding="utf-8")
         except Exception as exc:
             logger.error("Failed to create dataset JSON for project %s: %s", project.name, exc)
 
@@ -111,7 +132,7 @@ def main() -> None:
             # Keep a copy of the user-facing prompt so we can resend it if we need to regenerate
             stage_prompts.append(messages[1]["content"])
             try:
-                response_content = gemini_client.chat_completion(messages, temperature=0)
+                response_content = gemini_client.chat_completion(messages, temperature=0, use_thinking=use_thinking)
             except Exception as exc:
                 logger.error("Gemini request failed: %s", exc)
                 raise SystemExit(1)
@@ -245,7 +266,7 @@ def main() -> None:
                 ]
 
                 try:
-                    response_content = gemini_client.chat_completion(messages, temperature=0)
+                    response_content = gemini_client.chat_completion(messages, temperature=0, use_thinking=use_thinking)
                 except Exception as exc:
                     logger.error("Gemini request failed during regeneration: %s", exc)
                     raise SystemExit(1)
