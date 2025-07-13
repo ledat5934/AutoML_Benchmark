@@ -103,8 +103,8 @@ def main() -> None:
         for key, lst in project.data_files.items():
             logger.info("  %-20s %s", key, [str(p) for p in lst])
 
-        # Build EDA report
-        analysis_report = analyzer.build_eda_report(project)
+        # Skip EDA report generation – dataset JSON already contains sufficient profiling summary.
+        analysis_report = ""
 
         # Initialize helpers
         prompt_builder = PromptBuilder()
@@ -240,51 +240,10 @@ def main() -> None:
             stage_paths_regen: List[Path] = []
 
             for stage in (1, 2, 3):
-                # Build comprehensive regeneration prompt (simplified)
-                def _extract_snippet(code_str: str, err_line: int, ctx: int = 15) -> str:
-                    """Return snippet of code ±ctx lines around err_line (1-indexed)."""
-                    lines = code_str.splitlines()
-                    start = max(0, err_line - ctx - 1)
-                    end = min(len(lines), err_line + ctx)
-                    return "\n".join(lines[start:end])
-
-                snippets: list[str] = []
-                for i, code in enumerate(stage_code_blocks):
-                    filename = f"stage{i+1}.py"
-                    # Try to locate line number from traceback for this file
-                    match = re.search(rf"File \".*{re.escape(filename)}\", line (\d+)", user_feedback)
-                    if match:
-                        line_no = int(match.group(1))
-                        snippet = _extract_snippet(code, line_no)
-                    else:
-                        # Try generic 'line N' capture (last occurrence)
-                        generic_tuples = re.findall(r"File \"([^\"]+)\", line (\d+)", user_feedback)
-                        chosen_line = None
-                        # Iterate from bottom to top (nearest to error)
-                        for file_path, ln in reversed(generic_tuples):
-                            # Skip library/vendor frames to focus on user code
-                            if file_path.startswith("/usr") or "site-packages" in file_path:
-                                continue
-                            ln_int = int(ln)
-                            if ln_int <= len(code.splitlines()):
-                                chosen_line = ln_int
-                                break
-
-                        # Fallback: use any line number that fits
-                        if chosen_line is None and generic_tuples:
-                            for _fp, ln in reversed(generic_tuples):
-                                ln_int = int(ln)
-                                if ln_int <= len(code.splitlines()):
-                                    chosen_line = ln_int
-                                    break
-
-                        if chosen_line:
-                            snippet = _extract_snippet(code, chosen_line)
-                        else:
-                            snippet = code
-                    snippets.append(f"### Stage {i+1} Code Snippet ###\n{snippet}")
-
-                all_previous_code = "\n\n".join(snippets)
+                # Build regeneration prompt with FULL code for all stages (no snippets)
+                all_previous_code = "\n\n".join([
+                    f"### Stage {i+1} Full Code ###\n{code}" for i, code in enumerate(stage_code_blocks)
+                ])
 
                 # Build simplified regeneration prompt
                 regen_prompt = (
