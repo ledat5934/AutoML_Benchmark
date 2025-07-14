@@ -329,6 +329,32 @@ class DataAnalyzer:
         dataset_info["files"] = files_meta
 
         # --------------------------------------------------------------
+        # Detect sample submission file and record its column schema
+        # --------------------------------------------------------------
+        sample_submission_info = None
+        for p in candidate_paths:
+            if p.is_file() and "sample" in p.stem.lower() and p.suffix.lower() in {".csv", ".tsv"}:
+                try:
+                    # Read only the header to avoid loading large files
+                    import pandas as pd  # local import within function scope
+                    df_header = pd.read_csv(p, nrows=0)
+                    sample_submission_info = {
+                        "path": p.relative_to(project.project_dir).as_posix(),
+                        "columns": df_header.columns.tolist(),
+                    }
+                    logger.info(
+                        "Detected sample submission file at %s with columns: %s",
+                        p,
+                        sample_submission_info["columns"],
+                    )
+                    break  # Use the first detected sample file
+                except Exception as exc:
+                    logger.warning("Failed to read sample submission file %s: %s", p, exc)
+
+        if sample_submission_info:
+            dataset_info["sample_submission"] = sample_submission_info
+
+        # --------------------------------------------------------------
         # 2) PROFILING SUMMARY using ydata_profiling
         # --------------------------------------------------------------
         profiling_summary: Dict[str, object] = {}

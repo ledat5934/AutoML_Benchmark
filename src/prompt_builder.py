@@ -127,6 +127,7 @@ class PromptBuilder:
         if stage == 1:
             return (
                 f"{pathlib_instruction}\n\n"
+                "IMPORTANT: The *dataset metadata JSON* provided above is for reference only. Use it to infer file paths and dataset structure, **but DO NOT copy or embed the JSON (or any large dictionaries) inside the generated Python code**. Your script should read data files directly from disk instead.\n\n"
                 "Declare **file-path constants** at the top of the script so they can be overridden easily when running outside Kaggle. Defaults should mirror the standard Kaggle notebook directory layout _but allow automatic fallback_: "
                 "Stage 1 focuses on **data loading, cleaning, prepprocessing**. "
                 "Write Python compatible code that: (1) loads the dataset (tabular, CV or NLP) "
@@ -149,6 +150,7 @@ class PromptBuilder:
         elif stage == 2:
             return (
                 f"{pathlib_instruction}\n\n"
+                "IMPORTANT: The *dataset metadata JSON* provided above is for reference only. Use it to infer file paths and dataset structure, **but DO NOT copy or embed the JSON (or any large dictionaries) inside the generated Python code**. Your script should read data files directly from disk instead.\n\n"
                 """
                  Declare **file-path constants** at the top of the script so they can be overridden easily when running outside Kaggle. Defaults should mirror the standard Kaggle notebook directory layout _but allow automatic fallback_: 
                 1. Perform an **80 / 20 stratified split** into training and validation sets using `train_test_split(random_state=42, stratify=y), using variables name from the preprocessing step if available`.
@@ -173,6 +175,7 @@ class PromptBuilder:
         elif stage == 3:
             return (
                 f"{pathlib_instruction}\n\n"
+                "IMPORTANT: The *dataset metadata JSON* provided above is for reference only. Use it to infer file paths and dataset structure, **but DO NOT copy or embed the JSON (or any large dictionaries) inside the generated Python code**. Your script should read data files directly from disk instead.\n\n"
                 '''
                 Declare **file-path constants** at the top of the script so they can be overridden easily when running outside Kaggle. Defaults should mirror the standard Kaggle notebook directory layout _but allow automatic fallback_: 
                 1. Ensure `trained_model` is available. If it is `None`, load the model from `models/model.pkl` using `joblib.load`.
@@ -183,6 +186,7 @@ class PromptBuilder:
                     • These are just examples; you must generate appropriate predictions for the task.
                 4. Build `submission_df` following the sample submission format (column names and index order).
                     • If a sample submission is provided (path detected by analyzer), respect its structure.
+                    • Use **exactly** the column names from the sample submission, including any prefixes (e.g. `target_0` … `target_6`). Do NOT replace them with plain integers or alternative names – the Kaggle evaluation expects an exact match.
                 5. Declare `SUBMISSION_PATH = "./outputs/submission.csv"` at the top and save the submission there.
                 6. Print a short confirmation message with the path to the generated file.
                 '''
