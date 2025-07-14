@@ -27,7 +27,7 @@ class ModelingGenerator:
                 "temperature": 0,  # Lower temperature for more consistent code
                 "top_p": 0.95,
                 "top_k": 40,
-                "max_output_tokens": 16000,
+                "max_output_tokens": 30000,
             }
         )
         print('Gemini API setup complete')
@@ -77,7 +77,6 @@ class ModelingGenerator:
         task_desc = metadata['task']
         file_paths = metadata.get('link to the dataset', [])
         output_desc = metadata.get('output_data', '')
-        ground_truth_paths = metadata.get('link to the ground truth', [])
         modeling_guideline = guidelines['guidelines'].get('modeling', {})
 
         prompt = f"""
@@ -85,7 +84,6 @@ You are an expert ML engineer. Generate Python modeling code for this dataset wh
 Dataset Name: {dataset_name}
 Task Description: {task_desc}
 File Paths: {file_paths}
-Ground Truth Paths: {ground_truth_paths}
 Output Description: {output_desc}
 Guidelines:
 {json.dumps(modeling_guideline, indent=2)}
@@ -96,13 +94,15 @@ Preprocessing Code(just the code, no other text, do not include test function):
 Requirements:
 1. Generate COMPLETE code which Executeable when combined with the preprocessing code
 2. Use the same variable names as the preprocessing code
-3. Consider following the modelling guidelines
+3. Follow exactly the modelling guidelines
 4. Try to choose the model architecture which provide best performance, do not mind the time complexity.
 5. Include model selection, hyperparameter tuning, training, ... of your choice
 6. Use appropriate libraries and functions
 7. Test the execution on the real data or parts of it(if the dataset is large), not the dummy data.
-8. Generate a submission.csv file for the test.csv file, do not need to evaluate the model on the ground truth file.
+8. Generate a submission.csv file for the test.csv file.
 9. The submission.csv file may not have the same rows as the test.csv file, so you need to map the rows to the test.csv file.
+10. With deep learning model, try to use GPU and use appropriate pretrained model if possible.
+11. When fine tunning pretrained model, use a big number of epochs with early stopping.
 ##Code format:
 #import necessary libraries
 # Include preprocessing code
@@ -112,18 +112,16 @@ Requirements:
 
 ## IMPORTANT NOTES:
 1. The preprocessing function `preprocess_data()` is already available - use it exactly as shown
-2. Choose appropriate model based on task type (classification/regression)
-3. Include proper error handling and validation
-4. Follow the modeling guidelines for model selection and hyperparameters
-5. Generate meaningful evaluation metrics
-6. DO NOT save model to file - just train and evaluate
-7. Make sure the code runs completely without errors
-8. Do not use hyperparameter tuning.
-9. If the problem is deep learning, try to use GPU and use appropriate pretrained model if possible.
-10. Use multimodal if necessary.
-11. Use ensemble of models if necessary.
-12. Limit the comment in the code.
-13. **Critical Error Handling**: The main execution block (`if __name__ == "__main__":`) MUST be wrapped in a try...except block. If ANY exception occurs during the process, the script MUST print the error and then **exit with a non-zero status code** using `sys.exit(1)`.
+2. Include proper error handling and validation
+3. Generate meaningful evaluation metrics
+4. DO NOT save model to file - just train and evaluate
+5. Make sure the code runs completely without errors
+6. Do not use hyperparameter tuning.
+7. Use multimodal if necessary.
+8. Use ensemble of models if necessary.
+9. Limit the comment in the code.
+10. **Critical Error Handling**: The main execution block (`if __name__ == "__main__":`) MUST be wrapped in a try...except block. If ANY exception occurs during the process, the script MUST print the error and then **exit with a non-zero status code** using `sys.exit(1)`.
+
 """
 
         # Add retry context if this is a retry
