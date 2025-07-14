@@ -7,7 +7,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 import re # Import regex để sửa lỗi JSON
 
-# 🔧 LOAD .ENV FILE
+# LOAD .ENV FILE
 load_dotenv()
 
 def count_tokens_gemini(text: str) -> int:
@@ -132,9 +132,19 @@ def create_enhanced_guideline_prompt(guideline_input: Dict) -> str:
     data_file_description = task_info.get('data_file_description', 'N/A')
     task_desc = task_info.get('task_description', 'N/A')
     
-    sample_summary = list(summaries.values())[0] if summaries else {}
+    sample_summary = {}
+    if summaries:
+        # Tìm summary đầu tiên có chữ 'train' trong tên file (key), không phân biệt hoa thường
+        # Nếu không tìm thấy, sẽ tự động lấy summary đầu tiên trong danh sách làm dự phòng
+        sample_summary = next(
+            (summary for filename, summary in summaries.items() if 'train' in filename.lower()),
+            list(summaries.values())[0]
+        )
+    
+    # Lấy n_rows và n_cols từ summary đã chọn
     n_rows = sample_summary.get('n_rows', 0)
     n_cols = sample_summary.get('n_cols', 0)
+
     
     sample_profile = list(profiles.values())[0] if profiles else {}
     alerts = sample_profile.get('alerts', [])
@@ -166,7 +176,9 @@ Your response must be guided by the following principles. Refer to these example
 **JUSTIFY YOUR CHOICES INTERNALLY**: Even though the final JSON doesn't have a reason for every single step, your internal reasoning process must be sound. Base your choices on the data's properties (type, statistics, alerts).
 
 **IT'S OKAY TO OMIT**: If a step is not necessary (e.g., feature selection for a dataset with very few features), provide an empty list [] or null for that key in the JSON output.
-
+**CONSIDER FEATURE SCALING FOR LARGE NUMERIC VALUES**:  
+If any numerical feature (including the target variable) has a very large mean or standard deviation (e.g., >10,000), consider applying scaling such as StandardScaler or MinMaxScaler.
+Scale the numerical target if it has very large mean and then rescale when predicts.
 ## High-Quality Examples
 
 **Example 1: Feature Engineering for a DateTime column**
@@ -182,11 +194,12 @@ If you see a numeric column 'income' with 25% missing values and a skewed distri
 Before generating the final JSON, think step-by-step:
 1. First, carefully identify the target variable and the task type (classification/regression).
 2. Second, review each variable. What are its type, statistics, and potential issues?
-3. Third, based on the data properties and the examples above, decide on the most appropriate, specific actions for each module.
+3. Third, based on the data properties and the examples above, decide on the most appropriate, specific ML or DL algorithm for this task.
+4. Forth, think the suitable preprocessing for the algorithm(Example: If use pretrained model for NLP tasks, feature engineering should not have 'generate embedding' step).
 4. Consider using pretrained model for NLP or CV tasks if necessary.
 5. If use pretrained model, choose most appropriate models for the task.
-6. With text data, consider between pretrained model and BOW, TF-IDF, ... base on task description.
-6. Finally, compile these specific actions into the required JSON format below.
+6. With text data, consider between pretrained model or BOW, TF-IDF, ... base on task.
+7. Finally, compile these specific actions into the required JSON format below.
 
 ## Output Format: Your response must be the JSON format below:
 Please provide your response in JSON format. It is acceptable to provide an empty list or null for recommendations if none are suitable.
@@ -204,6 +217,13 @@ Please provide your response in JSON format. It is acceptable to provide an empt
         "reasoning": "explanation for target selection",
         "task_type": "classification/regression/etc"
     }},
+    "modeling": {{
+        "recommended_algorithms": ["algorithm"],
+        "explanation": "explanation for the recommended algorithms",
+        "model_selection": [model_name1, model_name2](description: name of the pretrained model if using, if not using, leave it blank),
+        "model_selection_reasoning": "explanation for the model selection",
+        "output_file_structure": {{"submission.csv": "submission file for the test dataset, contain n Columns:[...], have the same columns but not the same rows with sample_submission.csv"}}
+    }},
     "preprocessing": {{
         "data_cleaning": ["specific step 1", "specific step 2"],
         "feature_engineering": ["specific technique 1", "specific technique 2"],
@@ -211,13 +231,6 @@ Please provide your response in JSON format. It is acceptable to provide an empt
         "missing_values": ["strategy 1", "strategy 2"],
         "feature_selection": ["method 1", "method 2"],
         "data_splitting": {{"train": 0.8, "val": 0.2, "strategy": "stratified"}}
-    }},
-    "modeling": {{
-        "recommended_algorithms": ["algorithm 1", "algorithm 2"],
-        "explanation": "explanation for the recommended algorithms",
-        "model_selection": [model_name1, model_name2](description: name of the pretrained model if using, if not using, leave it blank),
-        "cross_validation": {{"method": "stratified_kfold", "folds": 5, "scoring": "appropriate_metric"}}
-        "output_file_structure": {{"submission.csv": "submission file for the test dataset, contain n Columns:[...], have the same format with ground_truth.csv", "ground_truth.csv": "ground truth file for the test dataset"}}
     }},
     "evaluation": {{
         "metrics": ["metric 1", "metric 2"],
@@ -227,7 +240,7 @@ Please provide your response in JSON format. It is acceptable to provide an empt
     }}
 }}"""
 
-    # 🔧 FIX: Chỉ return prompt trực tiếp, không dùng .format() nữa
+    #  FIX: Chỉ return prompt trực tiếp, không dùng .format() nữa
     # Vì f-string đã thay thế tất cả variables rồi
     return prompt
 
@@ -252,7 +265,7 @@ def call_gemini_for_guideline(prompt: str, model: str = "gemini-2.5-flash") -> t
             generation_config={
                 "temperature": 0, # Giảm nhiệt độ để có kết quả nhất quán hơn
                 "top_p": 0.95, "top_k": 40,
-                "max_output_tokens": 8000,
+                "max_output_tokens": 16000,
                 "response_mime_type": "application/json", # Yêu cầu Gemini trả về JSON
             }
         )
