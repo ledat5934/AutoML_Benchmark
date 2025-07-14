@@ -100,8 +100,38 @@ def main() -> None:
     for project in projects:
         logger.info("\n[PROJECT] %s", project.name)
         logger.info("  DESC: %s", project.desc_path)
+        # ------------------------------------------------------------------
+        # Friendly logging of project data files:
+        #   • Avoid printing thousands of individual JSON files (pet_finder, etc.)
+        #   • Cap long lists and provide a concise summary instead.
+        # ------------------------------------------------------------------
+        MAX_FILES_TO_DISPLAY = 10  # How many file paths per key we show at most
+
+        # First, detect single-file JSON entries (common when a folder contains many
+        # small JSON docs). If there are a lot, summarise rather than enumerate.
+        json_single_entries = [
+            key for key, lst in project.data_files.items()
+            if len(lst) == 1 and lst[0].suffix.lower() in {".json", ".jsonl"}
+        ]
+
+        JSON_SUMMARY_THRESHOLD = 25  # If more than this many JSON entries, summarise
+
+        if len(json_single_entries) > JSON_SUMMARY_THRESHOLD:
+            logger.info("  %-20s %s", "json_files", f"{len(json_single_entries)} individual .json/.jsonl files (omitted)")
+
         for key, lst in project.data_files.items():
-            logger.info("  %-20s %s", key, [str(p) for p in lst])
+            # Skip per-file logging for the bulk JSON entries we summarised above
+            if key in json_single_entries and len(json_single_entries) > JSON_SUMMARY_THRESHOLD:
+                continue
+
+            # Convert Path objects to strings only for a limited slice
+            display_paths = [str(p) for p in lst[:MAX_FILES_TO_DISPLAY]]
+
+            # If there are more files than the cap, append a concise summary
+            if len(lst) > MAX_FILES_TO_DISPLAY:
+                display_paths.append(f"... (+{len(lst) - MAX_FILES_TO_DISPLAY} more)")
+
+            logger.info("  %-20s %s", key, display_paths)
 
         # Skip EDA report generation – dataset JSON already contains sufficient profiling summary.
         analysis_report = ""

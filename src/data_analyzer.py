@@ -285,10 +285,25 @@ class DataAnalyzer:
         seen = set()
         files_meta = []
 
+        # --------------------------------------------------------------
+        # Handle potentially HUGE collections of individual files (e.g. thousands
+        # of .json items in datasets like *pet_finder*).  Listing every single
+        # file path inflates the JSON which in turn bloats the prompt and token
+        # count for Gemini/LLM.  Therefore we cap the number of file metadata
+        # entries and append a concise summary for the remainder.
+        # --------------------------------------------------------------
+
+        MAX_FILE_ENTRIES = 20  # Keep at most this many detailed file records
+
         for p in candidate_paths:
             if p in seen or not p.exists():
                 continue
             seen.add(p)
+
+            # Stop adding detailed entries once we reach the cap – we'll summarise later
+            if len(files_meta) >= MAX_FILE_ENTRIES:
+                continue
+
             files_meta.append(
                 {
                     "path": p.relative_to(project.project_dir).as_posix(),
@@ -296,6 +311,21 @@ class DataAnalyzer:
                     "type": _infer_type(p),
                 }
             )
+
+        omitted_count = len(candidate_paths) - len(files_meta)
+
+        if omitted_count > 0:
+            # Append a lightweight summary object so the LLM still knows additional
+            # files exist without enumerating every path.
+            files_meta.append(
+                {
+                    "path": "<omitted>",
+                    "role": "bulk_files_summary",
+                    "type": "summary",
+                    "omitted_count": omitted_count,
+                }
+            )
+
         dataset_info["files"] = files_meta
 
         # --------------------------------------------------------------

@@ -1,4 +1,8 @@
 .env
 input/
 input
-_pycache_/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*$py.class
