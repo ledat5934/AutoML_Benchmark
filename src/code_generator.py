@@ -103,5 +103,7 @@ class CodeGenerator:
                 code_block = chosen or ""
             else:
                 code_block = raw_response
-        self.validate(code_block)
-        return code_block 
+        # Dedent code to avoid indentation errors when code is pasted with leading spaces
+        dedented_code = textwrap.dedent(code_block)
+        self.validate(dedented_code)
+        return dedented_code 

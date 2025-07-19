@@ -13,14 +13,18 @@ from src.utils.logger import setup_logging, get_logger
 from src.data_analyzer import DataAnalyzer, ProjectInfo
 from src.prompt_builder import PromptBuilder
 from src.code_generator import CodeGenerator
-from src.file_assembler import FileAssembler
 from src.utils.gemini_client import GeminiClient
+from src.file_assembler import FileAssembler
 
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="AutoML Benchmark Orchestrator")
-    parser.add_argument("path", type=str, help="Root path containing project data")
+    parser.add_argument("path", type=str, nargs="?", help="Root path containing project data (used for both generation and runtime if -g/-r not specified)")
     parser.add_argument("--all", action="store_true", help="Process every project found instead of just the first one")
+
+    # Dual path support for generation vs runtime
+    parser.add_argument("-g", type=str, help="Path where dataset exists during code generation (overrides path argument)")
+    parser.add_argument("-r", type=str, help="Path where dataset will exist during code execution (overrides path argument)")
 
     # Kaggle runtime accelerators (mutually exclusive)
     accel_group = parser.add_mutually_exclusive_group()
@@ -38,7 +42,18 @@ def _parse_args() -> argparse.Namespace:
         "-thinking", "--thinking", type=str, default="off",
         help="Gemini thinking mode: off | on | <int>. Example: -thinking=on or --thinking 256"
     )
-    return parser.parse_args()
+    
+    args = parser.parse_args()
+    
+    # Validation: Either provide path OR both -g and -r
+    if args.g or args.r:
+        if not (args.g and args.r):
+            parser.error("If using -g or -r, both -g and -r must be specified")
+    else:
+        if not args.path:
+            parser.error("Either provide path argument OR both -g and -r arguments")
+    
+    return args
 
 
 def main() -> None:
@@ -82,13 +97,25 @@ def main() -> None:
         logger.error("Failed to load environment configuration: %s", exc)
         raise SystemExit(1)
 
-    root_path = Path(args.path).expanduser().resolve()
-    logger.info("Scanning input path: %s", root_path)
+    # Handle path configuration
+    if args.g and args.r:
+        # Dual path mode: different paths for generation and runtime
+        generation_path = Path(args.g).expanduser().resolve()
+        runtime_path = args.r
+        logger.info("DUAL PATH MODE:")
+        logger.info("  Generation path (for analysis): %s", generation_path)
+        logger.info("  Runtime path (for execution): %s", runtime_path)
+    else:
+        # Single path mode: same path for both generation and runtime
+        generation_path = Path(args.path).expanduser().resolve()
+        runtime_path = None  # Will use generation path in dataset JSON
+        logger.info("SINGLE PATH MODE:")
+        logger.info("  Path (for both analysis and execution): %s", generation_path)
     if accelerator:
         logger.info("Requested Kaggle accelerator: %s", accelerator)
 
     analyzer = DataAnalyzer()
-    projects: List[ProjectInfo] = analyzer.analyze(root_path)
+    projects: List[ProjectInfo] = analyzer.analyze(generation_path)
 
     if not projects:
         logger.error("No project definitions found. Exiting.")
@@ -143,7 +170,7 @@ def main() -> None:
         # Build dataset metadata JSON once – reuse for error regeneration prompts
         dataset_json_content = ""
         try:
-            dataset_json_content = analyzer.generate_dataset_json(project, openai_client=gemini_client, message=args.message).read_text(encoding="utf-8")
+            dataset_json_content = analyzer.generate_dataset_json(project, openai_client=gemini_client, message=args.message, runtime_path=runtime_path).read_text(encoding="utf-8")
         except Exception as exc:
             logger.error("Failed to create dataset JSON for project %s: %s", project.name, exc)
 
@@ -185,100 +212,59 @@ def main() -> None:
             # Update prev_code context
             prev_code += "\n\n" + code_block
 
-        # Assemble final outputs (flatten: outputs/<dataset>.py, .ipynb)
-        assembler = FileAssembler()
+        # -----------------------------
+        # Automatic execution & retry (max 5 attempts)
+        # -----------------------------
+        MAX_AUTO_RETRIES = 5
         output_root = Path("outputs")
-        assembler.assemble(project.name, stage_paths, output_root)
-        logger.info("Project %s processing completed. Outputs in %s", project.name, output_root / f"{project.name}.py")
+        output_root.mkdir(parents=True, exist_ok=True)
+        assembler = FileAssembler()
 
-        # ------------------------------------------------------------------
-        # Interactive validation – give the user a chance to report errors.
-        # ------------------------------------------------------------------
+        def _write_combined_script() -> Path:
+            """Assemble current stage scripts into a single cleaned script via FileAssembler and return its path."""
+            current_stage_files = [project.project_dir / f"stage{i}.py" for i in (1, 2, 3)]
+            assembler.assemble(project.name, current_stage_files, output_root)
+            return output_root / f"{project.name}.py"
 
-        # ------------------------------------------------------------------
-        # Helper: get user feedback (supports multi-line traceback). The user
-        # can simply type "-c" and press Enter to confirm success. Otherwise,
-        # they may paste the traceback/error and end with an empty line.
-        # ------------------------------------------------------------------
+        def _run_script(script_path: Path) -> tuple[bool, str]:
+            """Run a Python script and return (success, stderr)."""
+            logger.info("Executing combined script %s", script_path)
+            import subprocess, sys
+            result = subprocess.run([sys.executable, str(script_path)], capture_output=True, text=True, timeout=1800)
+            if result.returncode == 0:
+                logger.info("Script executed successfully.")
+                if result.stdout:
+                    logger.debug("Script stdout:\n%s", result.stdout)
+                return True, ""
+            logger.error("Script execution failed with return code %s", result.returncode)
+            logger.error("stderr:\n%s", result.stderr)
+            return False, result.stderr or result.stdout
 
-        def _collect_feedback() -> str:
-            """Read either a single-line '-c' or a multi-line error message.
+        # Attempt initial run + retries
+        success, error_feedback = False, ""
+        for attempt in range(1, MAX_AUTO_RETRIES + 1):
+            combined_script_path = _write_combined_script()
+            success, error_feedback = _run_script(combined_script_path)
 
-            The user can:
-            1. Type '-c' <Enter>  ➜ generation succeeded.
-            2. Paste an error/traceback (may contain blank lines) and, when done,
-               type '-e' <Enter> on a new line to signal end of input.
-            """
-            prompt_msg = (
-                "\nGeneration completed.\n"
-                "  • Enter '-c' and press <Enter> if everything worked fine.\n"
-                "  • Otherwise, paste the error/traceback. When finished, type '-e' on a new line and press <Enter>.\n> "
-            )
-            try:
-                first_line = input(prompt_msg)
-            except EOFError:
-                # Non-interactive environment: assume success
-                return "-c"
-
-            # Quick success path
-            if first_line.strip() == "-c":
-                return "-c"
-
-            # Collect error lines until sentinel '-e' is entered
-            lines: list[str] = []
-            if first_line.strip() != "-e":  # '-e' alone means no error text provided
-                lines.append(first_line)
-
-            while True:
-                try:
-                    line = input()
-                except EOFError:
-                    break  # End of input stream
-                if line.strip() == "-e":
-                    break
-                lines.append(line)
-            return "\n".join(lines)
-
-        # Enter regeneration loop – continue until user confirms success (-c)
-        while True:
-            user_feedback = _collect_feedback()
-
-            if user_feedback == "-c":
-                logger.info("User confirmed success. Exiting.")
-                # --------------------------------------------------
-                # Save Gemini token usage statistics to JSON
-                # --------------------------------------------------
-                try:
-                    usage = gemini_client.get_token_usage()
-                    # Simple cost estimate assuming $0.0000003 per prompt token and $0.0000025 per completion token
-                    usage["estimated_cost_usd"] = round(
-                        (usage["total_prompt_tokens"] * 0.3 + usage["total_completion_tokens"] * 2.5) / 1_000_000,
-                        6,
-                    )
-
-                    token_usage_path = output_root / "token_usage.json"
-                    with open(token_usage_path, "w", encoding="utf-8") as f:
-                        json.dump(usage, f, indent=2)
-                    logger.info("Token usage summary written to %s", token_usage_path)
-                except Exception as exc:
-                    logger.warning("Failed to write token usage JSON: %s", exc)
+            if success:
+                logger.info("Project %s processing completed after %d attempt(s). Output script: %s", project.name, attempt, combined_script_path)
                 break
 
-            logger.info("User reported issue – attempting regeneration with error context…")
+            # -----------------------------
+            # Regeneration path with traceback
+            # -----------------------------
+            logger.info("Attempt %d/%d failed – regenerating code with traceback context…", attempt, MAX_AUTO_RETRIES)
 
-            # Prepare for regeneration – overwrite existing stage files
+            # Overwrite existing stage files after regeneration
             stage_paths_regen: List[Path] = []
-
             for stage in (1, 2, 3):
-                # Build regeneration prompt with FULL code for all stages (no snippets)
                 all_previous_code = "\n\n".join([
                     f"### Stage {i+1} Full Code ###\n{code}" for i, code in enumerate(stage_code_blocks)
                 ])
 
-                # Build simplified regeneration prompt
                 regen_prompt = (
                     f"### DATASET METADATA JSON ###\n{dataset_json_content}\n\n"
-                    f"### ERROR TRACEBACK ###\n{user_feedback}\n\n"
+                    f"### ERROR TRACEBACK ###\n{error_feedback}\n\n"
                     f"### EXISTING CODE ###\n{all_previous_code}\n\n"
                     f"You are tasked with fixing **Stage {stage}** based on the traceback.\n"
                     f"Follow these common repair patterns:\n"
@@ -303,19 +289,32 @@ def main() -> None:
 
                 new_code_block = codegen.validate_and_extract(response_content)
 
+                # Save new stage file and update stored code
                 stage_file = project.project_dir / f"stage{stage}.py"
-                codegen.save(new_code_block, stage_file)  # overwrite existing stage file
+                codegen.save(new_code_block, stage_file)
                 stage_paths_regen.append(stage_file)
-
-                # Update stored code for potential further regenerations
                 stage_code_blocks[stage - 1] = new_code_block
 
-            # Re-assemble final outputs with regenerated code
+            # Re-assemble the combined script after regeneration
             assembler.assemble(project.name, stage_paths_regen, output_root)
-            logger.info(
-                "Regeneration completed. Updated outputs in %s",
-                output_root / f"{project.name}.py",
+        else:
+            logger.error("Project %s failed after %d automatic regeneration attempts.", project.name, MAX_AUTO_RETRIES)
+
+        # --------------------------------------------------
+        # Save Gemini token usage statistics to JSON after processing (success or fail)
+        # --------------------------------------------------
+        try:
+            usage = gemini_client.get_token_usage()
+            usage["estimated_cost_usd"] = round(
+                (usage["total_prompt_tokens"] * 0.3 + usage["total_completion_tokens"] * 2.5) / 1_000_000,
+                6,
             )
+            token_usage_path = output_root / "token_usage.json"
+            with open(token_usage_path, "w", encoding="utf-8") as f:
+                json.dump(usage, f, indent=2)
+            logger.info("Token usage summary written to %s", token_usage_path)
+        except Exception as exc:
+            logger.warning("Failed to write token usage JSON: %s", exc)
 
     # Print token usage summary at the end
     if 'gemini_client' in locals():

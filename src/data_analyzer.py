@@ -180,6 +180,7 @@ class DataAnalyzer:
         project: ProjectInfo,
         openai_client: Optional["GeminiClient"] = None,
         message: str | None = None,
+        runtime_path: str | None = None,
     ) -> Path:
         """Create a `<dataset>.json` file under *project.project_dir* containing
         1. dataset_info – file paths and inferred roles
@@ -193,6 +194,12 @@ class DataAnalyzer:
         dataset for the code generation process. The generated code should NOT expect
         this JSON file to exist in the actual dataset directory.
         
+        Parameters:
+        -----------
+        runtime_path : str | None
+            Optional path where the dataset will exist during code execution (e.g., Kaggle path).
+            If not provided, uses the generation path (where dataset exists during analysis).
+        
         Returns the path to the newly written JSON file.
         """
         import pandas as pd  # local import to avoid heavy cost for users not needing this feature
@@ -203,25 +210,29 @@ class DataAnalyzer:
         # --------------------------------------------------------------
         # 1) DATASET INFO
         # --------------------------------------------------------------
-        # Convert to path string that works both locally and on Kaggle
+        # Handle dual path concept: generation path vs runtime path
         kaggle_input_prefix = "/kaggle/input"
         project_dir_posix = project.project_dir.as_posix()
 
+        # Generation path (for analysis) - current logic
         if project_dir_posix.startswith(kaggle_input_prefix):
-            # Running inside Kaggle or pointing to Kaggle dataset – keep absolute path so that
-            # subsequent code can read files directly without additional joins.
-            base_path_str = project_dir_posix
+            generation_base_path = project_dir_posix
         else:
-            # Try to build a relative path to make the JSON portable across OSes.
             try:
-                base_path_str = project.project_dir.relative_to(_Path.cwd()).as_posix()
+                generation_base_path = project.project_dir.relative_to(_Path.cwd()).as_posix()
             except ValueError:
-                # Fallback to absolute posix path (Windows -> C:/...)
-                base_path_str = project_dir_posix
+                generation_base_path = project_dir_posix
+
+        # Runtime path (for execution) - use provided runtime_path or fallback to generation path
+        if runtime_path is not None:
+            runtime_base_path = runtime_path
+        else:
+            runtime_base_path = generation_base_path
 
         dataset_info: Dict[str, object] = {
             "name": project.name,
-            "base_path": base_path_str,
+            "base_path": runtime_base_path,  # Use runtime path for code generation
+            "generation_path": generation_base_path,  # Keep generation path for reference
             "description_file": project.desc_path.relative_to(project.project_dir).as_posix(),
             "files": []
         }
@@ -376,60 +387,41 @@ class DataAnalyzer:
         if profile_df is not None:
             try:
                 from ydata_profiling import ProfileReport  # type: ignore
-                # Import the Settings object for configuration
-                from ydata_profiling.config import Settings
                 logger.info("Creating ydata_profiling report (optimized for size)...")
                 
-                # Create highly optimized config to minimize JSON size
-                config_dict = {
-                    # Disable expensive computations
-                    "samples": {"head": 0, "tail": 0},  # No sample data
-                    "duplicates": {"head": 0},  # No duplicate examples
-                    "missing_diagrams": {"heatmap": False, "dendrogram": False},
-                    "correlations": {
-                        "pearson": {"calculate": True, "warn_high_cardinality": False},
-                        "spearman": {"calculate": False},  # Disable Spearman
-                        "kendall": {"calculate": False},   # Disable Kendall
-                        "phi_k": {"calculate": False},     # Disable Phi-k
-                        "cramers": {"calculate": False}    # Disable Cramer's V
-                    },
-                    "interactions": {"continuous": False, "targets": []},
-                    "html": {"minify_html": True},
-                    "plot": {
-                        "histogram": {"bins": 10},  # Reduce histogram bins
-                        "correlation": {"cmap": "RdYlBu_r", "bad": "#000000"}
-                    },
-                    # Most important: limit value counts to reduce JSON size
-                    "vars": {
-                        "cat": {
-                            "length": False,  # Disable length analysis for strings
-                            "characters": False,  # Disable character analysis
-                            "words": False,  # Disable word analysis
-                            "n_obs": 10  # Only show top 10 most frequent values
-                        },
-                        "bool": {"n_obs": 3},  # Only show 3 obs for boolean
-                        "num": {
-                            "low_categorical_threshold": 0,  # Don't treat numeric as categorical
-                        }
-                    }
-                }
-                
-                # Convert the dictionary to a Settings object
-                profiling_settings = Settings(config_dict)
-                
+                # Create profile with simplified configuration (from alt/profile_data.py)
                 profile = ProfileReport(
-                    profile_df, 
-                    minimal=True,  # Use minimal mode
-                    config=profiling_settings,  # Pass the Settings object
-                    title=f"Dataset Profile: {project.name}"
+                    profile_df,
+                    title=f"Dataset Profile: {project.name}",
+                    minimal=True,
+                    samples={
+                        "random": 5
+                    },
+                    correlations={
+                        "auto": {"calculate": False},
+                        "pearson": {"calculate": False},
+                        "spearman": {"calculate": False},
+                        "kendall": {"calculate": False},
+                        "phi_k": {"calculate": False}
+                    },
+                    missing_diagrams={
+                        "bar": False,
+                        "matrix": False,
+                        "heatmap": False,
+                        "dendrogram": False
+                    },
+                    interactions={"targets": []},
+                    explorative=False,
+                    progress_bar=False,
+                    infer_dtypes=True
                 )
                 
-                # Try to convert to JSON format first
+                # Get JSON and apply filtering (inspired by alt/profile_data.py)
                 try:
-                    profile_json = json.loads(profile.to_json())
-                    # Post-process to reduce size if needed
-                    profiling_summary = self._optimize_ydata_profiling_output(profile_json)
-                    logger.info("Successfully generated and optimized ydata_profiling JSON report")
+                    profile_json_str = profile.to_json()
+                    filtered_json_str = self._filter_value_counts(profile_json_str)
+                    profiling_summary = json.loads(filtered_json_str)
+                    logger.info("Successfully generated and filtered ydata_profiling JSON report")
                 except Exception as json_exc:
                     logger.warning("ydata_profiling to_json() failed: %s", json_exc)
                     # Fallback: use description dict which contains structured data
@@ -454,7 +446,7 @@ class DataAnalyzer:
         description_text = project.desc_path.read_text(encoding="utf-8")
 
         if openai_client:
-            logger.info("Extracting task definition from description.txt using LLM...")
+            logger.info("Extracting comprehensive guidelines from description.txt using LLM...")
             task_definition = self._extract_task_with_llm(
                 project_name=project.name,
                 description=description_text,
@@ -463,8 +455,8 @@ class DataAnalyzer:
                 message=message,
             )
         else:
-            logger.warning("No OpenAI client provided. Creating a fallback task definition.")
-            task_definition = self._create_fallback_task_definition(project, profile_df, description_text)
+            logger.warning("No LLM client provided. Skipping task definition extraction.")
+            task_definition = {"error": "No LLM client available for task definition extraction"}
 
         # --------------------------------------------------------------
         # 4) ASSEMBLE and WRITE FINAL JSON
@@ -481,6 +473,88 @@ class DataAnalyzer:
         logger.info("Dataset metadata written to %s", out_path)
         return out_path
 
+    def _create_variables_summary(self, variables: Dict) -> Dict:
+        """Create intelligent summary of variables for LLM (inspired by alt/guideline_create.py)."""
+        if not variables:
+            return {}
+        
+        var_types = {"numerical": [], "categorical": [], "text": [], "datetime": [], "other": []}
+        
+        for var_name, var_info in variables.items():
+            var_type = var_info.get("type", "")
+            var_summary = {
+                "name": var_name, 
+                "type": var_type,
+                "missing_pct": round(var_info.get("p_missing", 0), 3),
+                "n_distinct": var_info.get("n_distinct", 0)
+            }
+            
+            if var_type == "Categorical":
+                var_summary.update({
+                    "imbalance": round(var_info.get("imbalance", 0), 3),
+                    "is_binary": var_info.get("n_distinct", 0) == 2
+                })
+                if var_info.get("n_distinct", 0) <= 10:
+                    value_counts = var_info.get("value_counts_without_nan", {})
+                    if value_counts:
+                        var_summary["top_values"] = dict(list(value_counts.items())[:5])
+            elif var_type == "Numeric":
+                var_summary.update({
+                    "min": var_info.get("min"), 
+                    "max": var_info.get("max"),
+                    "mean": round(var_info.get("mean", 0), 3) if var_info.get("mean") else None,
+                    "std": round(var_info.get("std", 0), 3) if var_info.get("std") else None
+                })
+            
+            # Categorize by type
+            if var_type == "Numeric": 
+                var_types["numerical"].append(var_summary)
+            elif var_type == "Categorical": 
+                var_types["categorical"].append(var_summary)
+            elif var_type == "Text": 
+                var_types["text"].append(var_summary)
+            elif var_type in ["DateTime", "Date", "Time"]: 
+                var_types["datetime"].append(var_summary)
+            else: 
+                var_types["other"].append(var_summary)
+
+        # Sort by missing percentage and distinct count
+        for v_type in var_types:
+            var_types[v_type] = sorted(var_types[v_type], key=lambda x: (x["missing_pct"], -x.get("n_distinct", 0)))
+            
+        # Summary statistics
+        total_rows = max((v.get("n", 1) for v in variables.values()), default=1)
+        summary_stats = {
+            "total_variables": len(variables),
+            "by_type": {k: len(v) for k, v in var_types.items() if v},
+            "missing_data": {
+                "variables_with_missing": sum(1 for v in variables.values() if v.get("p_missing", 0) > 0),
+                "avg_missing_pct": round(sum(v.get("p_missing", 0) for v in variables.values()) / (len(variables) or 1), 3)
+            },
+            "data_issues": {
+                "id_like_features": [],
+                "high_cardinality_features": [],
+                "highly_imbalanced_features": []
+            }
+        }
+        
+        # Detect data issues
+        for var_name, var_info in variables.items():
+            n_distinct = var_info.get("n_distinct", 0)
+            if n_distinct > total_rows * 0.95 and total_rows > 1:
+                summary_stats["data_issues"]["id_like_features"].append(var_name)
+            if n_distinct > 100:
+                summary_stats["data_issues"]["high_cardinality_features"].append(var_name)
+            if var_info.get("type") == "Categorical" and var_info.get("imbalance", 0) > 0.95:
+                summary_stats["data_issues"]["highly_imbalanced_features"].append({
+                    "name": var_name, 
+                    "imbalance": round(var_info.get("imbalance", 0), 3)
+                })
+                
+        return {"summary_stats": summary_stats, "variables_by_type": var_types}
+
+
+
     def _extract_task_with_llm(
         self,
         project_name: str,
@@ -489,82 +563,151 @@ class DataAnalyzer:
         profiling_summary: Dict[str, object],
         message: str | None = None,
     ) -> Dict[str, object]:
-        """Use an LLM to parse the description.txt and profiling summary into a structured task definition."""
+        """Use an LLM to parse the description.txt and profiling summary into a comprehensive task definition (inspired by alt/guideline_create.py)."""
 
-        # Select a few key fields from profiling to give the LLM context without overloading it
-        context_fields = {
-            "table": profiling_summary.get("table"),
-            "variables": {
-                k: {
-                    "type": v.get("type"),
-                    "description": v.get("description"),
-                    "n_missing": v.get("n_missing"),
-                    "p_missing": v.get("p_missing"),
-                    "n_unique": v.get("n_unique"),
-                    "is_highly_correlated": v.get("is_highly_correlated"),
-                }
-                for k, v in profiling_summary.get("variables", {}).items()
-            },
-            "analysis": profiling_summary.get("analysis"),
-        }
-        profiling_context = json.dumps(context_fields, indent=2)
+        # Extract table info
+        table_info = profiling_summary.get("table", {})
+        n_rows = table_info.get("n", 0)
+        n_cols = table_info.get("n_var", 0)
+        
+        # Create intelligent variables summary
+        variables = profiling_summary.get("variables", {})
+        variables_summary = self._create_variables_summary(variables)
+        variables_summary_str = json.dumps(variables_summary, indent=2, ensure_ascii=False)
+        
+        # Extract alerts if available
+        alerts = profiling_summary.get("alerts", [])
+        alerts_summary = alerts[:3] if alerts else ['None']
 
         # --------------------------------------------------------------
         # Incorporate optional user message into the prompt
         # --------------------------------------------------------------
         user_message_section = f"\n**User Additional Instructions:**\n{message}\n" if message else ""
 
-        prompt = f"""You are an expert machine learning engineer analyzing a new dataset.
-Your goal is to create a structured JSON object that defines the machine learning task.
-You will be given the dataset description and a JSON summary from a profiling tool.{user_message_section}
+        prompt = f"""You are an expert Machine Learning architect. Your task is to analyze the provided dataset information and create a specific, actionable, and justified guideline for an AutoML pipeline.{user_message_section}
 
-Analyze the provided text and JSON to perform the following:
-1.  **Summarize Description**: Read the 'Dataset Description' and create a concise summary.
-2.  **Identify Special Notes**: Carefully review the description for any critical details that would affect modeling, such as:
-    -   It is a multi-output or multi-label classification task.
-    -   The dataset is imbalanced.
-    -   Specific evaluation metrics are required (e.g., "must use AUC ROC").
-    -   The data has unique properties (e.g., time-series, hierarchical).
-    If you find any such details, add them to a 'note' field. If not, omit the note. The note should be a brief, impactful statement for the developer. For example, for the steel defect problem which is multi-output, a good note would be: "This is a multi-output classification problem; all outputs must be predicted correctly for a successful prediction."
-3.  **Determine Task Type**: Based on all available information, classify the task. Common types include:
-    -   `binary_classification`
-    -   `multi_class_classification`
-    -   `multi_label_classification`
-    -   `regression`
-    -   `clustering`
-    -   `time_series_forecasting`
-4.  **Identify Target Column(s)**: Find the name of the target column(s) or dependent variable(s). It might be explicitly named or implied. List them.
-5.  **Identify Evaluation Metric**: Determine the primary metric for evaluating model performance. If not specified, suggest a standard metric for the task type (e.g., 'accuracy' for classification, 'rmse' for regression).
+## Dataset Information:
+- **Dataset**: {project_name}
+- **Task Description**: {description[:500]}{'...' if len(description) > 500 else ''}
+- **Size**: {n_rows:,} rows, {n_cols} columns
+- **Key Quality Alerts**: {alerts_summary}
 
-**Input:**
-**Project Name:** {project_name}
-**Dataset Description:**
----
-{description}
----
-**Profiling Summary:**
----
-{profiling_context}
----
+## Variables Analysis Summary:
+```json
+{variables_summary_str}
+```
 
-**Output Format:**
-Return ONLY a valid JSON object with the following structure. Do NOT include any explanations or markdown formatting.
+## Guideline Generation Principles & Examples
+Your response must be guided by the following principles. Refer to these examples to understand the expected level of detail.
+
+**BE SPECIFIC AND ACTIONABLE**: Your recommendations must be concrete actions.
+- Bad (Generic): "Handle missing values"
+- Good (Specific): "Impute 'Age' with the median"
+
+**JUSTIFY YOUR CHOICES INTERNALLY**: Even though the final JSON doesn't have a reason for every single step, your internal reasoning process must be sound. Base your choices on the data's properties (type, statistics, alerts).
+
+**IT'S OKAY TO OMIT**: If a step is not necessary (e.g., feature selection for a dataset with very few features), provide an empty list [] or null for that key in the JSON output.
+
+**CONSIDER FEATURE SCALING FOR LARGE NUMERIC VALUES**: If any numerical feature (including the target variable) has a very large mean or standard deviation (e.g., >10,000), consider applying scaling such as StandardScaler or MinMaxScaler.
+
+## High-Quality Examples
+
+**Example 1: Feature Engineering for a DateTime column**
+If you see a DateTime column like 'transaction_date', a good feature_engineering list would be ["Extract 'month' from 'transaction_date'", "Extract 'day_of_week' from 'transaction_date'"].
+
+**Example 2: Handling High Cardinality Categorical Data**
+If a categorical column 'product_id' has over 100 unique values, a good feature_engineering recommendation would be ["Apply frequency encoding to 'product_id'"] instead of one-hot encoding to avoid a memory explosion.
+
+**Example 3: Handling Missing Numerical Data**
+If you see a numeric column 'income' with 25% missing values and a skewed distribution, a good missing_values recommendation would be ["Impute 'income' with its median"].
+
+## Required Thinking Process (Do not output this part)
+Before generating the final JSON, think step-by-step:
+1. First, carefully identify the target variable and the task type (classification/regression).
+2. Second, review each variable. What are its type, statistics, and potential issues?
+3. Third, based on the data properties and the examples above, decide on the most appropriate, specific ML or DL algorithm for this task.
+4. Fourth, think the suitable preprocessing for the algorithm (Example: If use pretrained model for NLP tasks, feature engineering should not have 'generate embedding' step).
+5. Consider using pretrained model for NLP or CV tasks if necessary.
+6. With text data, consider between pretrained model or BOW, TF-IDF, ... based on task.
+7. Finally, compile these specific actions into the required JSON format below.
+
+## Output Format: Your response must be the JSON format below:
+Please provide your response in JSON format. It is acceptable to provide an empty list or null for recommendations if none are suitable.
+
+**IMPORTANT**: Ensure the generated JSON is perfectly valid.
+- All strings must be enclosed in double quotes.
+- All backslashes inside strings must be properly escaped (e.g., "C:\\\\\\\\path" not "C:\\\\path").
+- There should be no unescaped newline characters within a string value.
+- Do not add trailing commas.
+- Do not include comments (// or #) within the JSON output.
 
 {{
-  "description_summary": "<Your concise summary of the dataset description>",
-  "note": "<Your critical note about the dataset, if any. Omit this field if there's nothing special.>",
-  "task_type": "<The determined machine learning task type>",
-  "target_columns": ["<list>", "<of>", "<target>", "<column>", "<names>"],
-  "evaluation_metric": "<The primary evaluation metric>"
-}}
-"""
+    "target_identification": {{
+        "target_variable": "identified_target_column_name",
+        "reasoning": "explanation for target selection",
+        "task_type": "classification/regression/etc"
+    }},
+    "modeling": {{
+        "recommended_algorithms": ["algorithm"],
+        "explanation": "explanation for the recommended algorithms",
+        "model_selection": ["model_name1", "model_name2"],
+        "model_selection_reasoning": "explanation for the model selection",
+        "output_file_structure": {{"submission.csv": "submission file for the test dataset, contain n Columns:[...], have the same columns but not the same rows with sample_submission.csv"}}
+    }},
+    "preprocessing": {{
+        "data_cleaning": ["specific step 1", "specific step 2"],
+        "feature_engineering": ["specific technique 1", "specific technique 2"],
+        "explanation": "explanation for the feature engineering",
+        "missing_values": ["strategy 1", "strategy 2"],
+        "feature_selection": ["method 1", "method 2"],
+        "data_splitting": {{"train": 0.8, "val": 0.2, "strategy": "stratified"}}
+    }},
+    "evaluation": {{
+        "metrics": ["metric 1", "metric 2"],
+        "validation_strategy": ["approach 1", "approach 2"],
+        "performance_benchmarking": ["baseline 1", "baseline 2"],
+        "result_interpretation": ["interpretation 1", "interpretation 2"]
+    }}
+}}"""
+
         try:
             messages = [{"role": "user", "content": prompt}]
-            response_str = client.chat_completion(messages=messages, temperature=0.0, clean_response=True)
-            return json.loads(response_str)
-        except json.JSONDecodeError as e:
-            logger.error("Failed to decode JSON from LLM response: %s\nResponse: %s", e, response_str)
-            return {"error": "Failed to parse LLM response as JSON", "raw_response": response_str}
+            # Use enhanced configuration inspired by alt
+            response_str = client.chat_completion(
+                messages=messages, 
+                temperature=0.0, 
+                clean_response=True
+            )
+            
+            # Enhanced JSON parsing with fallback (inspired by alt)
+            try:
+                guidelines = json.loads(response_str)
+                logger.info("Guidelines parsed successfully for project: %s", project_name)
+                return guidelines
+            except json.JSONDecodeError as e:
+                logger.warning("JSON parse error, attempting to fix: %s", e)
+                # Advanced fixing logic from alt
+                response_fixed = response_str.strip()
+                if response_fixed.startswith("```json"):
+                    response_fixed = response_fixed[7:]
+                if response_fixed.endswith("```"):
+                    response_fixed = response_fixed[:-3]
+                # Remove trailing commas
+                import re
+                response_fixed = re.sub(r",\s*([}\]])", r"\1", response_fixed)
+                
+                try:
+                    guidelines = json.loads(response_fixed)
+                    logger.info("Successfully parsed after manual fixing")
+                    return guidelines
+                except json.JSONDecodeError as e2:
+                    logger.error("Failed to parse even after fixing: %s", e2)
+                    return {
+                        "error": "Failed to parse LLM response as JSON",
+                        "raw_response": response_str,
+                        "parse_error": str(e2)
+                    }
+                    
         except Exception as e:
             logger.error("An unexpected error occurred during LLM task extraction: %s", e)
             return {"error": f"An unexpected error occurred: {e}"}
@@ -676,199 +819,53 @@ Return ONLY a valid JSON object with the following structure. Do NOT include any
             "note": "This is a simplified profile due to ydata_profiling compatibility issues"
         }
 
-    def _optimize_ydata_profiling_output(self, profile_json: Dict) -> Dict:
-        """Optimize ydata_profiling output to minimize JSON size - only keep counts, not value lists."""
-        logger.info("Aggressively optimizing ydata_profiling output to minimize size...")
-        
-        # Make a copy to avoid modifying the original
-        optimized = profile_json.copy()
-        size_reductions = []
-        
-        # Aggressively reduce variable details
-        if 'variables' in optimized:
-            for var_name, var_data in optimized['variables'].items():
-                if isinstance(var_data, dict):
-                    original_keys = list(var_data.keys())
-                    
-                    # REMOVE all value lists - only keep counts and basic stats
-                    items_to_remove = []
-                    for key in var_data.keys():
-                        # Remove any field that contains actual values
-                        if any(pattern in key.lower() for pattern in [
-                            'value_counts', 'values', 'categories', 'histogram', 
-                            'frequent_patterns', 'word_counts', 'character_counts',
-                            'sample', 'examples', 'mode', 'first_rows', 'last_rows'
-                        ]):
-                            items_to_remove.append(key)
-                    
-                    # Actually remove the items
-                    for key in items_to_remove:
-                        if key in var_data:
-                            del var_data[key]
-                            size_reductions.append(f"{var_name}.{key}")
-                    
-                    # Keep only essential stats for each variable type
-                    essential_stats = {
-                        'count', 'distinct', 'missing', 'memory_size', 'type',
-                        'mean', 'std', 'min', 'max', 'variance', 'kurtosis', 'skewness',
-                        'sum', 'mad', 'range', 'iqr', 'cv', 'quantile_25', 'quantile_50', 'quantile_75',
-                        'n_distinct', 'p_distinct', 'is_unique', 'n_unique', 'p_unique',
-                        'n_missing', 'p_missing', 'n_infinite', 'p_infinite'
-                    }
-                    
-                    # Remove non-essential fields
-                    keys_to_check = list(var_data.keys())
-                    for key in keys_to_check:
-                        if key not in essential_stats and not key.startswith('p_') and not key.startswith('n_'):
-                            # Keep basic numeric stats but remove complex objects
-                            if isinstance(var_data[key], (dict, list)) and key not in ['type']:
-                                del var_data[key]
-                                size_reductions.append(f"{var_name}.{key}")
-        
-        # Heavily reduce correlations section
-        if 'correlations' in optimized:
-            corr_data = optimized['correlations']
-            if isinstance(corr_data, dict):
-                # Remove all correlation matrices, keep only high-level stats
-                for corr_type in ['pearson', 'spearman', 'kendall', 'phi_k', 'cramers']:
-                    if corr_type in corr_data and isinstance(corr_data[corr_type], dict):
-                        corr_section = corr_data[corr_type]
-                        # Remove matrix data but keep summary stats
-                        items_to_remove = ['matrix', 'values', 'index']
-                        for item in items_to_remove:
-                            if item in corr_section:
-                                del corr_section[item]
-                                size_reductions.append(f"correlations.{corr_type}.{item}")
-        
-        # Remove large data sections completely
-        sections_to_remove = [
-            'sample', 'duplicates', 'missing', 'interactions', 
-            'alerts', 'package', 'analysis'
-        ]
-        for section in sections_to_remove:
-            if section in optimized:
-                del optimized[section]
-                size_reductions.append(f"root.{section}")
-        
-        # Keep only essential table info
-        if 'table' in optimized:
-            table_data = optimized['table']
-            if isinstance(table_data, dict):
-                # Keep only basic table stats
-                essential_table_keys = {
-                    'n', 'n_var', 'memory_size', 'record_size', 
-                    'n_cells', 'n_cells_missing', 'p_cells_missing',
-                    'n_duplicates', 'p_duplicates'
-                }
-                keys_to_remove = [k for k in table_data.keys() if k not in essential_table_keys]
-                for key in keys_to_remove:
-                    del table_data[key]
-                    size_reductions.append(f"table.{key}")
-        
-        # Add comprehensive optimization note
-        if 'table' not in optimized:
-            optimized['table'] = {}
-        optimized['table'].update({
-            'size_optimized': True,
-            'optimization_level': 'aggressive',
-            'optimization_note': 'All value lists removed - only counts and basic statistics retained',
-            'removed_sections': len(size_reductions),
-            'optimization_strategy': 'Minimal JSON for maximum compatibility with LLM token limits'
-        })
-        
-        logger.info("Aggressive optimization completed - removed %d sections/fields", len(size_reductions))
-        logger.debug("Removed items: %s", ', '.join(size_reductions[:10]) + ('...' if len(size_reductions) > 10 else ''))
-        
-        return optimized
+    def _filter_value_counts(self, profile_json_str: str) -> str:
+        """Filter and optimize ydata_profiling JSON output (inspired by alt/profile_data.py)."""
+        try:
+            profile_dict = json.loads(profile_json_str)
+        except json.JSONDecodeError as e:
+            logger.warning("JSON decode error: %s", e)
+            return profile_json_str
 
-    def _create_fallback_task_definition(self, project: ProjectInfo, profile_df: Optional["pd.DataFrame"], desc_text: str) -> Dict[str, object]:
-        """Create a fallback task definition when Gemini API fails or is unavailable."""
-        import pandas as pd
-        
-        logger.info("Creating fallback task definition for project: %s", project.name)
-        
-        # Basic task definition structure
-        task_def = {
-            "problem_type": "Unknown",
-            "objective": "Automated machine learning task",
-            "method": "fallback_analysis",
-            "note": "Generated without LLM due to API issues"
-        }
-        
-        # Try to infer basic info from dataset if available
-        if profile_df is not None:
-            # Try to detect target column
-            potential_targets = []
-            for col in profile_df.columns:
-                col_lower = col.lower()
-                if any(keyword in col_lower for keyword in ['target', 'label', 'class', 'y', 'outcome']):
-                    potential_targets.append(col)
-                elif profile_df[col].nunique() <= 20 and profile_df[col].nunique() > 1:  # Low cardinality, likely categorical target
-                    potential_targets.append(col)
-            
-            # Infer problem type
-            if potential_targets:
-                target_col = potential_targets[0]
-                unique_values = profile_df[target_col].nunique()
-                
-                if pd.api.types.is_numeric_dtype(profile_df[target_col]):
-                    if unique_values <= 10:
-                        task_def["problem_type"] = "Classification"
-                    else:
-                        task_def["problem_type"] = "Regression"
-                else:
-                    task_def["problem_type"] = "Classification"
-                
-                task_def["target_column"] = {
-                    "name": target_col,
-                    "description": f"Detected target column with {unique_values} unique values"
-                }
-                
-                task_def["objective"] = f"Predict {target_col} using available features"
-                
-            else:
-                # No clear target found
-                task_def["target_column"] = {
-                    "name": "unknown",
-                    "description": "No clear target column detected"
-                }
-                task_def["objective"] = "General data analysis and modeling"
-            
-            # Basic feature info
-            numeric_cols = profile_df.select_dtypes(include=['number']).columns.tolist()
-            categorical_cols = profile_df.select_dtypes(include=['object', 'category']).columns.tolist()
-            
-            task_def["features"] = {
-                "total_features": len(profile_df.columns),
-                "numeric_features": len(numeric_cols),
-                "categorical_features": len(categorical_cols),
-                "sample_numeric": numeric_cols[:5],
-                "sample_categorical": categorical_cols[:5]
-            }
-            
-            task_def["dataset_info"] = {
-                "rows": len(profile_df),
-                "columns": len(profile_df.columns),
-                "memory_usage": f"{profile_df.memory_usage(deep=True).sum() / 1024 / 1024:.1f} MB"
-            }
-        
-        # Use description text for additional context
-        if desc_text:
-            # Simple keyword detection
-            desc_lower = desc_text.lower()
-            if any(keyword in desc_lower for keyword in ['classification', 'classify', 'predict class']):
-                task_def["problem_type"] = "Classification"
-            elif any(keyword in desc_lower for keyword in ['regression', 'predict value', 'continuous']):
-                task_def["problem_type"] = "Regression"
-            
-            # Extract a brief objective from description
-            if len(desc_text) > 0:
-                # Use first sentence or first 100 chars as objective
-                first_sentence = desc_text.split('.')[0]
-                if len(first_sentence) <= 100:
-                    task_def["objective"] = first_sentence.strip()
-                else:
-                    task_def["objective"] = desc_text[:100].strip() + "..."
-        
-        logger.info("Fallback task definition created successfully")
-        return task_def 
+        if "variables" not in profile_dict:
+            logger.warning("No 'variables' section found in profile")
+            return profile_json_str
+
+        for var_name, var_info in profile_dict["variables"].items():
+            var_type = var_info.get("type", "")
+            n_unique = var_info.get("n_unique", 0)
+
+            # Nếu là kiểu văn bản hoặc có quá nhiều giá trị rời rạc → xoá các phần nặng
+            should_remove = (
+                var_type in ["Text", "Numeric", "Date", "DateTime", "Time", "URL", "Path"]
+                or (var_type == "Categorical" and n_unique > 50)
+            )
+
+            if should_remove:
+                keys_to_remove = [
+                    "value_counts_without_nan",
+                    "value_counts_index_sorted",
+                    "histogram",
+                    "length_histogram",
+                    "histogram_length",
+                    "block_alias_char_counts",
+                    "word_counts",
+                    "category_alias_char_counts",
+                    "script_char_counts",
+                    "block_alias_values",
+                    "category_alias_values",
+                    "character_counts",
+                    "block_alias_counts",
+                    "script_counts",
+                    "category_alias_counts",
+                    "n_block_alias",
+                    "n_scripts",
+                    "n_category",
+                ]
+
+                for key in keys_to_remove:
+                    var_info.pop(key, None)
+
+        return json.dumps(profile_dict, ensure_ascii=False, indent=2)
+
+ 

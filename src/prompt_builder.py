@@ -50,19 +50,22 @@ class PromptBuilder:
         """
 
         # ------------------------------------------------------------------
-        # Extract base_path from dataset_json for cross-platform path handling
+        # Extract paths from dataset_json for dual path support
         # ------------------------------------------------------------------
-        # Ensure we always have a _base_path attribute to prevent AttributeError
-        self._base_path = getattr(self, "_base_path", ".")  # default fallback
+        # Ensure we always have path attributes to prevent AttributeError
+        self._base_path = getattr(self, "_base_path", ".")  # runtime path
+        self._generation_path = getattr(self, "_generation_path", ".")  # generation path
 
         if dataset_json:
             try:
                 # The dataset_json string may contain extra whitespace/newlines – load safely
                 dataset_meta = json.loads(dataset_json)
-                self._base_path = dataset_meta.get("dataset_info", {}).get("base_path", ".") or "."
+                dataset_info = dataset_meta.get("dataset_info", {})
+                self._base_path = dataset_info.get("base_path", ".") or "."  # runtime path
+                self._generation_path = dataset_info.get("generation_path", self._base_path) or "."  # generation path
             except json.JSONDecodeError:
-                # If JSON parsing fails, keep the previous (or default) base path
-                logger.warning("Failed to parse dataset_json – falling back to '.' for base_path")
+                # If JSON parsing fails, keep the previous (or default) paths
+                logger.warning("Failed to parse dataset_json – falling back to '.' for paths")
 
         
         # ------------------------------------------------------------------
@@ -110,9 +113,23 @@ class PromptBuilder:
         # ------------------------------------------------------------------
         # Mẫu “file-paths constants” mới cho mọi script
         # ------------------------------------------------------------------
-        base = self._base_path
+        runtime_path = self._base_path
+        generation_path = self._generation_path
+        
+        # Build path instructions with dual path support
+        if runtime_path != generation_path:
+            dual_path_note = (
+                f"**DUAL PATH SETUP**: This code is being generated on a different system than where it will run.\n"
+                f"- Generation path (where dataset exists now): `{generation_path}`\n"
+                f"- Runtime path (where dataset will exist during execution): `{runtime_path}`\n"
+                f"The generated code should use the RUNTIME path (`{runtime_path}`) for all dataset access.\n\n"
+            )
+        else:
+            dual_path_note = ""
+
         pathlib_instruction = (
             "IMPORTANT: Use **pathlib** for all paths and ensure the code runs identically on Kaggle notebooks, Linux CLI, and Windows.\n"
+            f"{dual_path_note}"
             "Determine the project root like this (handles the Jupyter/Kaggle `__file__` absence):\n"
             "```python\n"
             "try:\n"
@@ -120,7 +137,7 @@ class PromptBuilder:
             "except NameError:  # __file__ is not defined inside Kaggle/Jupyter\n"
             "    ROOT_DIR = Path.cwd()\n"
             "```\n"
-            f"Then set `BASE_PATH = (ROOT_DIR / '{base}').resolve()`; if that path doesn't exist, fall back to `Path('{base}').resolve()`.\n"
+            f"Then set `BASE_PATH = (ROOT_DIR / '{runtime_path}').resolve()`; if that path doesn't exist, fall back to `Path('{runtime_path}').resolve()`.\n"
             "Always print the resolved BASE_PATH so users can verify."
         )
 
@@ -128,6 +145,7 @@ class PromptBuilder:
             return (
                 f"{pathlib_instruction}\n\n"
                 "IMPORTANT: The *dataset metadata JSON* provided above is for reference only. Use it to infer file paths and dataset structure, **but DO NOT copy or embed the JSON (or any large dictionaries) inside the generated Python code**. Your script should read data files directly from disk instead.\n\n"
+                "**PATH HANDLING**: If dual path setup is indicated above, ensure the generated code uses the RUNTIME path for all dataset access, not the generation path. The runtime path is where the dataset will be located when the code actually executes.\n\n"
                 "Declare **file-path constants** at the top of the script so they can be overridden easily when running outside Kaggle. Defaults should mirror the standard Kaggle notebook directory layout _but allow automatic fallback_: "
                 "Stage 1 focuses on **data loading, cleaning, prepprocessing**. "
                 "Write Python compatible code that: (1) loads the dataset (tabular, CV or NLP) "
@@ -151,16 +169,18 @@ class PromptBuilder:
             return (
                 f"{pathlib_instruction}\n\n"
                 "IMPORTANT: The *dataset metadata JSON* provided above is for reference only. Use it to infer file paths and dataset structure, **but DO NOT copy or embed the JSON (or any large dictionaries) inside the generated Python code**. Your script should read data files directly from disk instead.\n\n"
+                "**PATH HANDLING**: If dual path setup is indicated above, ensure the generated code uses the RUNTIME path for all dataset access, not the generation path. The runtime path is where the dataset will be located when the code actually executes.\n\n"
                 """
                  Declare **file-path constants** at the top of the script so they can be overridden easily when running outside Kaggle. Defaults should mirror the standard Kaggle notebook directory layout _but allow automatic fallback_: 
                 1. Perform an **80 / 20 stratified split** into training and validation sets using `train_test_split(random_state=42, stratify=y), using variables name from the preprocessing step if available`.
                 2. Build a **model automatically suited to the task type**. Examples:
-                    • **Tabular**: Gradient Boosting (`LightGBM`, `CatBoost`, `XGBoost`), `RandomForest`.
+                    • **Tabular**: Deep learning models (e.g. `MLP`, `CNN`, `LSTM`, `Transformer`) if needed, Gradient Boosting (`XGBoost', Linear Regression, Logistic Regression, `LightGBM`, `CatBoost`, ...), `RandomForest` or other models when beneficial.
                     • **Image**: Fine-tune a pre-trained CNN (e.g. EfficientNet, ResNet, ConvNeXt) or use a Vision Transformer – you may implement in **PyTorch** *or* **TensorFlow/Keras**.
                     • **Text**: Fine-tune a transformer (e.g. BERT, RoBERTa) using HuggingFace (either PyTorch or TensorFlow backend).
                     • **Multimodal**: Combine extracted embeddings or use a fusion network.
                     • You may choose deep learning frameworks (PyTorch, TensorFlow/Keras) when beneficial.
                     • These are just examples; you can choose any model that you think is appropriate.
+                    • The model you intend to use for the task CAN be different from the one in the metadata JSON.
                 3. Fit the model on the training split. Use early stopping on the validation split (100 rounds).
                 4. Evaluate and **print** multiple metrics **and also persist them to a JSON file**:
                     • Classification → Accuracy, F1, LogLoss, ROC_AUC.
@@ -176,6 +196,7 @@ class PromptBuilder:
             return (
                 f"{pathlib_instruction}\n\n"
                 "IMPORTANT: The *dataset metadata JSON* provided above is for reference only. Use it to infer file paths and dataset structure, **but DO NOT copy or embed the JSON (or any large dictionaries) inside the generated Python code**. Your script should read data files directly from disk instead.\n\n"
+                "**PATH HANDLING**: If dual path setup is indicated above, ensure the generated code uses the RUNTIME path for all dataset access, not the generation path. The runtime path is where the dataset will be located when the code actually executes.\n\n"
                 '''
                 Declare **file-path constants** at the top of the script so they can be overridden easily when running outside Kaggle. Defaults should mirror the standard Kaggle notebook directory layout _but allow automatic fallback_: 
                 1. Ensure `trained_model` is available. If it is `None`, load the model from `models/model.pkl` using `joblib.load`.

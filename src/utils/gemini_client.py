@@ -181,9 +181,9 @@ class GeminiClient:
             
             # Token usage tracking
             if response.usage_metadata:
-                self.total_prompt_tokens += response.usage_metadata.prompt_token_count
-                self.total_completion_tokens += response.usage_metadata.candidates_token_count
-                self.total_tokens += response.usage_metadata.total_token_count
+                self.total_prompt_tokens += response.usage_metadata.prompt_token_count or 0
+                self.total_completion_tokens += response.usage_metadata.candidates_token_count or 0
+                self.total_tokens += response.usage_metadata.total_token_count or 0
             self.request_count += 1
             
             content = self._extract_response_content(response)
